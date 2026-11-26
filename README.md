@@ -109,7 +109,6 @@ app\DSPStudio.exe --self-test --hardware --report verification\manual_hardware_c
 
 ```text
 D:/dsp/
-  启动软件.cmd
   使用说明.md
   app/              可直接运行的 exe 及动态库
   source/           Python 源码、测试、构建脚本

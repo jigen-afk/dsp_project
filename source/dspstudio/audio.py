@@ -40,10 +40,15 @@ class AudioEngine:
         self.warning = ""
         self.rate = SR
         self.reference = None
+        self.preview_stream = None
 
     @staticmethod
     def devices():
         return list(sd.query_devices())
+
+    @staticmethod
+    def host_apis():
+        return [api["name"] for api in sd.query_hostapis()]
 
     def _capture(self, data, status):
         if status:
@@ -60,7 +65,7 @@ class AudioEngine:
     def _prepare(self, mode):
         if self.stream:
             raise ValueError("请先停止当前录音")
-        sd.stop()
+        self.stop_playback()
         self.chunks = []
         self.frames = 0
         self.level = 0
@@ -152,12 +157,26 @@ class AudioEngine:
             data = np.concatenate(self.chunks)
         return mono_audio(data, self.rate)
 
-    def play(self, data, device=None, volume=0.8):
+    def play(self, data, device=None, volume=0.8, *, start_sample=0):
         if self.stream:
             raise ValueError("请先停止录音再试听")
         rate = int(sd.query_devices(device,"output")["default_samplerate"])
+        self.stop_playback()
+        audio = safe_output(data)[start_sample:] * volume
+        sd.play(resample(audio, SR, rate), samplerate=rate, device=device)
+        self.preview_stream = sd.get_stream()
+
+    def is_playing(self):
+        if self.preview_stream is None:
+            return False
+        try:
+            return bool(self.preview_stream.active)
+        except sd.PortAudioError:
+            return False
+
+    def stop_playback(self):
         sd.stop()
-        sd.play(resample(safe_output(data)*volume, SR, rate), samplerate=rate, device=device)
+        self.preview_stream = None
 
     def close(self):
         if self.stream:
@@ -165,4 +184,4 @@ class AudioEngine:
             self.stream.close()
             self.stream = None
         self.mode = None
-        sd.stop()
+        self.stop_playback()

@@ -2,7 +2,7 @@
 
 ## 启动
 
-Windows 10/11 64 位，双击根目录的 `启动软件.cmd`，或运行 `app/DSPStudio.exe`。无需另外安装 Python，无需联网。请保留整个 app 文件夹；不要单独移动 exe。软件目录需要可写。
+Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，无需联网。请保留整个 app 文件夹；不要单独移动 exe。软件目录需要可写。
 
 若从源码运行：建议 Python 3.13，先执行 `python -m venv .venv`，然后 `.venv\Scripts\python -m pip install -r requirements-lock.txt`，最后 `.venv\Scripts\python main.py`。源码在 source 文件夹。
 

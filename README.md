@@ -11,7 +11,14 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-在 Windows 10/11 下，从 `source` 运行 `powershell -File build.ps1` 可构建当前版本的便携包，入口为 `source/dist/DSPStudio/DSPStudio.exe`。移动时请复制整个 `DSPStudio` 文件夹。仓库随附的既有便携包位于 `app/`。
+Windows 10/11（64 位）可前往 [最新 Release](https://github.com/jigen-afk/dsp_project/releases/latest) 下载 `DSPStudio-Windows-x64.zip`。完整解压后运行 `DSPStudio/DSPStudio.exe`，并保留同目录的 `_internal`。
+
+从 `source` 运行 `powershell -File build.ps1` 也可在本机构建，入口为 `source/dist/DSPStudio/DSPStudio.exe`。仓库随附的既有便携包位于 `app/`。
+
+## 自动构建和发布
+
+- PR 提交后，[Windows build and release](https://github.com/jigen-afk/dsp_project/actions/workflows/windows.yml) 会运行源码测试和打包版自检。通过后可在对应运行记录的 **Artifacts** 下载试用包。
+- PR 合入默认分支后会再构建一次。测试通过后，工作流把 ZIP 和 SHA-256 校验文件发布到 **Latest Release**，无需手动打标签、配置发布密钥或上传 EXE。默认分支的直接提交也走同一流程。
 
 ## 一、采集实际环境语音
 

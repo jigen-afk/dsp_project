@@ -3,7 +3,7 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
-#include <compressapi.h>
+#include <zstd.h>
 
 #include <array>
 #include <cstdint>
@@ -52,7 +52,7 @@ Payload payload() {
     }
     Bytes bytes(static_cast<const unsigned char*>(content), SizeofResource(module, resource));
     const auto magic = take(bytes, 8);
-    if (std::memcmp(magic.data(), "DSPSFX01", magic.size()) != 0) {
+    if (std::memcmp(magic.data(), "DSPSFX02", magic.size()) != 0) {
         throw std::runtime_error("Unrecognized application archive.");
     }
     const auto size = read_size(bytes);
@@ -77,15 +77,9 @@ fs::path executable_directory() {
 
 void unpack(const Payload& archive, const fs::path& directory) {
     auto contents = std::make_unique_for_overwrite<unsigned char[]>(archive.size);
-    DECOMPRESSOR_HANDLE decompressor = nullptr;
-    if (!CreateDecompressor(COMPRESS_ALGORITHM_LZMS, nullptr, &decompressor)) {
-        throw std::runtime_error("Cannot open the Windows decompressor.");
-    }
-    size_t decoded = 0;
-    const auto ok = Decompress(
-        decompressor, archive.compressed.data(), archive.compressed.size(), contents.get(), archive.size, &decoded);
-    CloseDecompressor(decompressor);
-    if (!ok || decoded != archive.size) {
+    const auto decoded = ZSTD_decompress(
+        contents.get(), archive.size, archive.compressed.data(), archive.compressed.size());
+    if (ZSTD_isError(decoded) || decoded != archive.size) {
         throw std::runtime_error("Cannot unpack the application archive.");
     }
 

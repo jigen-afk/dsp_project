@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QDoubleSpinBox, QSpinBox, QTabBar,
@@ -231,9 +231,13 @@ class MainWindow(QMainWindow):
         icon = QPixmap(64,64)
         icon.fill(QColor("#223f9e"))
         painter = QPainter(icon)
-        painter.setPen(QColor("#ffffff"))
-        painter.setFont(QFont("Segoe UI",30,QFont.Bold))
-        painter.drawText(icon.rect(),Qt.AlignCenter,"∿")
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#ffffff"), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        wave = QPainterPath()
+        wave.moveTo(11, 32)
+        wave.cubicTo(18, 12, 25, 12, 32, 32)
+        wave.cubicTo(39, 52, 46, 52, 53, 32)
+        painter.drawPath(wave)
         painter.end()
         self.setWindowIcon(QIcon(icon))
         self._build()

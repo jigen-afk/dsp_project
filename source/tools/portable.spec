@@ -8,7 +8,7 @@ analysis = Analysis(
         "matplotlib", "pandas", "torch", "sklearn", "pytest", "IPython",
         "tkinter", "numba", "cv2", "sphinx", "docutils", "PIL",
         "pygments", "babel", "jinja2", "ssl", "_ssl", "_hashlib",
-        "PySide6.QtNetwork",
+        "PySide6.QtNetwork", "zstandard",
     ],
 )
 

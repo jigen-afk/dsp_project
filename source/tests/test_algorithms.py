@@ -96,11 +96,28 @@ def test_nlms_alignment_echo_reduction_and_near_end_preserved():
     assert 20*np.log10(before/after)>35
     assert np.corrcoef(out[start:],near[start:])[0,1]>.99
     assert abs(stats["delay_ms"]-delay/SR*1000)<.1
+    assert stats["calibration_reduction_db"] > 20
 
 
 def test_aec_rejects_silent_reference():
     with pytest.raises(ValueError):
         cancel_echo(np.ones(SR),np.zeros(SR))
+
+
+@pytest.mark.parametrize("delay_ms", [None, 50])
+def test_aec_rejects_unrelated_reference(delay_ms):
+    rng = np.random.default_rng(720)
+    mic, reference = rng.normal(0, 0.05, (2, SR * 6)).astype(np.float32)
+    with pytest.raises(ValueError, match="校准验证未测到足够的回声降低"):
+        cancel_echo(mic, reference, delay_ms=delay_ms)
+
+
+def test_aec_can_validate_before_a_pause_at_the_end_of_calibration():
+    rng = np.random.default_rng(91)
+    reference = np.zeros(SR * 3, dtype=np.float32)
+    reference[:3 * SR // 2] = rng.normal(0, 0.08, 3 * SR // 2)
+    _, stats = cancel_echo(reference * 0.5, reference, delay_ms=0, taps=128)
+    assert stats["calibration_reduction_db"] > 20
 
 
 def test_effects_duration_bandwidth_and_finite_output():

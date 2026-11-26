@@ -137,6 +137,16 @@ def estimate_delay(mic, reference, max_delay_ms=1200):
     return best
 
 
+def _aec_validation_window(aligned, start, end):
+    length = min(SR // 2, (end - start) // 4)
+    minimum_level = max(1e-5, 0.1 * rms(aligned[start:end]))
+    for stop in (end, end - length):
+        begin = stop - length
+        if rms(aligned[begin:stop]) >= minimum_level:
+            return begin, stop
+    raise ValueError("校准后半段缺少参考声音。请使用连续有声的参考音频，或调整校准时长后重试。")
+
+
 def cancel_echo(mic, reference, delay_ms=None, taps=512, mu=0.35, calibration_seconds=2.0, progress=None):
     """Time-domain NLMS; adapt on far-end-only prefix, then freeze for double talk.
 
@@ -160,8 +170,22 @@ def cancel_echo(mic, reference, delay_ms=None, taps=512, mu=0.35, calibration_se
     cal_end = min(len(mic), delay + round(calibration_seconds * SR))
     if cal_end - delay < SR // 2:
         raise ValueError("至少需要 0.5 秒有效校准音频")
+    check_start, check_end = _aec_validation_window(aligned, delay, cal_end)
+    calibration_reduction = 0.0
     floor = max(1e-9, rms(aligned) ** 2 * taps * 0.001)
     for i in range(len(mic)):
+        if i == check_start:
+            # Check the current filter on samples it has not learned from yet.
+            history = max(0, i - taps + 1)
+            predicted = signal.lfilter(weights, [1], aligned[history:check_end])[-(check_end - i):]
+            observed = mic[i:check_end]
+            level = rms(observed)
+            if level < 1e-5:
+                raise ValueError("校准片段几乎静音。请检查扬声器音量、麦克风和参考音频。")
+            calibration_reduction = float(20 * np.log10(level / max(rms(observed - predicted), 1e-10)))
+            if calibration_reduction < 0.5:
+                raise ValueError(f"校准验证未测到足够的回声降低（{calibration_reduction:.2f} dB）。"
+                                 "请确认参考对应这次播放，并在校准时保持安静后重录。")
         u = padded[i:i+taps][::-1]
         error = float(mic[i]) - float(weights @ u)
         out[i] = error
@@ -174,6 +198,7 @@ def cancel_echo(mic, reference, delay_ms=None, taps=512, mu=0.35, calibration_se
     # Reduction is only an energy ratio; near-end speech makes it different from true ERLE.
     reduction = 20*np.log10(max(rms(mic[start:]), 1e-10) / max(rms(out[start:]), 1e-10))
     return safe_output(out), {"delay_ms": delay * 1000 / SR, "energy_reduction_db": float(reduction),
+                              "calibration_reduction_db": calibration_reduction,
                               "calibration_seconds": calibration_seconds, "taps": taps}
 
 

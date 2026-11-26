@@ -39,17 +39,31 @@ jobs:
           New-Item -ItemType Directory -Path $isolated | Out-Null
           $exe = Join-Path $isolated 'DSPStudio.exe'
           Copy-Item -LiteralPath 'source/dist/DSPStudio.exe' -Destination $exe
-          $report = Join-Path $isolated 'self-check.json'
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
-          $process = Start-Process -FilePath $exe `
-            -WorkingDirectory $isolated -ArgumentList "--self-test --report `"$report`"" `
-            -WindowStyle Hidden -Wait -PassThru
-          if (!(Test-Path -LiteralPath $report)) {
-            throw "The packaged EXE did not produce a self-test report (exit $($process.ExitCode))."
+          function Test-DspExecutable([string]$report) {
+            $process = Start-Process -FilePath $exe `
+              -WorkingDirectory $isolated -ArgumentList "--self-test --report `"$report`"" `
+              -WindowStyle Hidden -Wait -PassThru
+            if (!(Test-Path -LiteralPath $report)) {
+              throw "The packaged EXE did not produce a self-test report (exit $($process.ExitCode))."
+            }
+            if ($process.ExitCode -ne 0 -or (Get-Content -LiteralPath $report -Raw | ConvertFrom-Json).passed -ne $true) {
+              throw 'The packaged EXE failed its self-test.'
+            }
           }
+          $report = Join-Path $isolated 'self-check.json'
+          Test-DspExecutable $report
           Get-Content -LiteralPath $report
-          if ($process.ExitCode -ne 0 -or (Get-Content -LiteralPath $report -Raw | ConvertFrom-Json).passed -ne $true) {
-            throw 'The packaged EXE failed its self-test.'
+          $runtime = Join-Path $isolated 'data/runtime'
+          $caches = @(Get-ChildItem -LiteralPath $runtime -Directory -Force)
+          if ($caches.Count -ne 1) {
+            throw 'The first launch did not create exactly one runtime cache.'
+          }
+          $marker = Join-Path $caches[0].FullName '.complete'
+          $created = (Get-Item -LiteralPath $marker -Force).LastWriteTimeUtc
+          Test-DspExecutable (Join-Path $isolated 'self-check-cached.json')
+          if ((Get-Item -LiteralPath $marker -Force).LastWriteTimeUtc -ne $created) {
+            throw 'The second launch did not reuse its runtime cache.'
           }
 
           $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()

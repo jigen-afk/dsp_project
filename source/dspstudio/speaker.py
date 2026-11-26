@@ -3,13 +3,14 @@ import json
 import os
 import uuid
 from pathlib import Path
-import numpy as np
-from scipy.fft import dct
-from scipy.special import logsumexp
-from .dsp import SR, mono_audio, rms
+from . import SR
 
 
 def features(audio):
+    import numpy as np
+    from scipy.fft import dct
+    from .dsp import mono_audio, rms
+
     x = mono_audio(audio).astype(np.float64)
     if len(x) < SR * 2 or rms(x) < 0.002:
         raise ValueError("请提供至少 2 秒清晰语音；当前音频太短或音量过低")
@@ -40,6 +41,9 @@ def features(audio):
 
 class DiagGMM:
     def fit(self, x, components=4):
+        import numpy as np
+        from scipy.special import logsumexp
+
         rng = np.random.default_rng(42)
         k = min(components, max(1, len(x)//50))
         self.mean = x[rng.choice(len(x), k, replace=False)].copy()
@@ -61,10 +65,14 @@ class DiagGMM:
         return self
 
     def log_components(self, x):
+        import numpy as np
+
         return np.stack([np.log(w+1e-20)-0.5*np.sum(np.log(2*np.pi*v)+(x-m)**2/v, axis=1)
                          for w,m,v in zip(self.weight, self.mean, self.var)], axis=1)
 
     def score(self, x):
+        from scipy.special import logsumexp
+
         return float(logsumexp(self.log_components(x), axis=1).mean())
 
 
@@ -96,6 +104,8 @@ class SpeakerStore:
         os.replace(temp, self.manifest)
 
     def enroll(self, name, audio):
+        import numpy as np
+
         name = name.strip()
         if not name or len(name) > 30:
             raise ValueError("姓名需要 1～30 个字符")
@@ -130,6 +140,8 @@ class SpeakerStore:
         return sorted(set(e["name"] for e in self.entries))
 
     def train(self):
+        import numpy as np
+
         if not self.entries:
             raise ValueError("请先注册项目成员")
         groups = {}

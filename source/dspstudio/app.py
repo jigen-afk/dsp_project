@@ -4,7 +4,6 @@ import os
 import sys
 import time
 from pathlib import Path
-import numpy as np
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (
@@ -14,10 +13,10 @@ from PySide6.QtWidgets import (
     QListWidget, QCheckBox, QMenu, QSizePolicy, QProgressBar, QPlainTextEdit,
     QScrollArea, QStackedWidget, QToolButton,
 )
-from .dsp import SR, rms, audio_stats, enhance, EchoConfig, add_echo, undo_echo, cancel_echo, effect
+from . import SR
 from .audio import AudioEngine, read_audio, write_audio
 from .speaker import SpeakerStore
-from .widgets import SignalTimeline
+from .widgets import SignalTimeline, clamp
 
 
 def application_root():
@@ -238,7 +237,7 @@ class MainWindow(QMainWindow):
         painter.end()
         self.setWindowIcon(QIcon(icon))
         self._build()
-        self.refresh_devices()
+        self.update_device_summary()
         self.refresh_members()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -320,7 +319,7 @@ class MainWindow(QMainWindow):
         header_actions = QHBoxLayout(self.header_actions)
         header_actions.setContentsMargins(0, 0, 0, 0)
         header_actions.setSpacing(7)
-        self.device_button = self.button("音频设备", self.device_dialog.exec)
+        self.device_button = self.button("音频设备", self.show_devices)
         header_actions.addWidget(self.device_button)
         header_actions.addWidget(self.button("指南", self.show_help))
         self.header.addWidget(self.header_actions, 0, 2)
@@ -447,6 +446,8 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         form = QFormLayout()
         self.input_device, self.output_device = QComboBox(), QComboBox()
+        self.input_device.addItem("系统默认输入", None)
+        self.output_device.addItem("系统默认输出", None)
         for box in (self.input_device, self.output_device):
             box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             box.setMinimumContentsLength(28)
@@ -906,6 +907,10 @@ class MainWindow(QMainWindow):
     def error(self, text):
         self.log("操作失败 · " + str(text), error=True)
 
+    def show_devices(self):
+        self.refresh_devices()
+        self.device_dialog.exec()
+
     def refresh_devices(self):
         old_in, old_out = self.input_device.currentData(), self.output_device.currentData()
         self.input_device.clear()
@@ -1002,6 +1007,8 @@ class MainWindow(QMainWindow):
         self.speaker_scores.clear()
         self.audition_tabs.setCurrentIndex(0)
         self.update_clip_label()
+        from .dsp import audio_stats, rms
+
         stats = audio_stats(audio)
         self.log(f"已载入 {title}，{len(audio)/SR:.2f} 秒")
         if rms(audio)<0.002:
@@ -1015,6 +1022,8 @@ class MainWindow(QMainWindow):
             self.state_label.setText("尚未载入音频")
             self.state_label.setToolTip("")
             return
+        from .dsp import audio_stats
+
         stats = audio_stats(self.original)
         self.state_label.setText(f"{stats['seconds']:.2f} 秒  ·  RMS {stats['rms_db']:.1f} dBFS")
         self.state_label.setToolTip(f"{self.original_title}\n{self.state_label.text()}\n峰值 {stats['peak']:.3f}")
@@ -1123,8 +1132,8 @@ class MainWindow(QMainWindow):
         if self.engine.stream:
             elapsed = self.engine.frames/self.engine.rate
             level = self.engine.level
-            dbfs = 20 * np.log10(max(level, 1e-5))
-            self.level_meter.setValue(int(np.clip((dbfs + 60) / 60 * 100, 0, 100)))
+            dbfs = 20 * math.log10(max(level, 1e-5))
+            self.level_meter.setValue(int(clamp((dbfs + 60) / 60 * 100, 0, 100)))
             self.level_meter.setToolTip(f"输入电平 {dbfs:.1f} dBFS")
             self.state_label.setText(f"正在录音 · {elapsed:.1f} 秒")
             if self.engine.done:
@@ -1302,6 +1311,8 @@ class MainWindow(QMainWindow):
                 noise = self.noise.copy()
             if noise is None and len(x)/SR < duration+0.1:
                 raise ValueError("输入音频需长于噪声估计时长，请缩短噪声时长或导入独立噪声样本")
+            from .dsp import enhance
+
             self.run_task("执行语音增强",lambda _:enhance(x,strength,duration,noise),lambda out:self.set_result(out,"语音增强"))
         except Exception as exc:
             self.error(str(exc))
@@ -1309,6 +1320,8 @@ class MainWindow(QMainWindow):
     def apply_echo(self):
         try:
             x = self.selected_audio()
+            from .dsp import EchoConfig, add_echo
+
             config = EchoConfig(self.echo_delay.value(),self.echo_decay.value(),self.echo_repeats.value())
             def done(result):
                 out,scale = result
@@ -1320,6 +1333,8 @@ class MainWindow(QMainWindow):
     def apply_undo_echo(self):
         if not self.echo_metadata or self.processed is None:
             return
+        from .dsp import undo_echo
+
         meta,x = self.echo_metadata.copy(),self.processed.copy()
         self.run_task("按本次生成参数还原回声",lambda _:undo_echo(x,meta["config"],meta["scale"],meta["length"]),lambda out:self.set_result(out,"已知回声逆滤波还原"))
 
@@ -1338,6 +1353,8 @@ class MainWindow(QMainWindow):
         try:
             if self.reference is None:
                 raise ValueError("请先同步录制，或导入对应的播放参考。")
+            from .dsp import cancel_echo
+
             x,reference = self.selected_audio(),self.reference.copy()
             delay = None if self.auto_delay.isChecked() else self.aec_delay.value()
             taps,cal = self.aec_taps.currentData(),self.calibration.value()
@@ -1421,6 +1438,8 @@ class MainWindow(QMainWindow):
     def apply_effect(self):
         try:
             x = self.selected_audio()
+            from .dsp import effect
+
             name, amount = self.effect_names[self.effect_choices.checkedId()], self.effect_amount.value()
             self.run_task("应用"+name,lambda _:effect(x,name,amount),lambda out:self.set_result(out,name))
         except Exception as exc:

@@ -1,5 +1,6 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM","offscreen")
+import subprocess
 import sys
 import time
 import numpy as np
@@ -9,9 +10,53 @@ from PySide6.QtGui import QColor, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from dspstudio.app import MainWindow, application_root, configure_appearance
+from dspstudio.audio import AudioEngine
 from dspstudio.diagnostics import synthetic_voice
 from dspstudio.dsp import SR
 from dspstudio.widgets import SignalTimeline
+
+
+def test_first_window_leaves_numerics_and_audio_libraries_unloaded(tmp_path):
+    script = """
+import sys
+from PySide6.QtWidgets import QApplication
+from dspstudio.app import MainWindow, configure_appearance
+
+app = QApplication([])
+configure_appearance(app)
+window = MainWindow(sys.argv[1])
+window.show()
+app.processEvents()
+window.close()
+assert {"numpy", "scipy", "sounddevice", "soundfile"}.isdisjoint(sys.modules)
+"""
+    subprocess.run([sys.executable, "-c", script, str(tmp_path)], check=True, timeout=30)
+
+
+def test_devices_are_discovered_when_settings_open(tmp_path, monkeypatch):
+    device = {"name": "Demo", "hostapi": 0, "max_input_channels": 1, "max_output_channels": 1}
+    probes = []
+
+    def devices():
+        probes.append(True)
+        return [device]
+
+    monkeypatch.setattr(AudioEngine, "devices", staticmethod(devices))
+    monkeypatch.setattr(AudioEngine, "host_apis", staticmethod(lambda: ["Test API"]))
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    monkeypatch.setattr(window.device_dialog, "exec", lambda: None)
+    assert not probes
+    assert window.input_device.currentData() is None
+    assert window.record_button.isEnabled()
+    window.show_devices()
+    assert probes == [True]
+    assert window.input_device.itemData(1) == 0
+    window.input_device.setCurrentIndex(1)
+    window.show_devices()
+    assert window.input_device.currentData() == 0
+    window.close()
+    app.processEvents()
 
 
 def test_portable_data_root_is_next_to_the_outer_exe(tmp_path, monkeypatch):

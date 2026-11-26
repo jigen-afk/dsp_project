@@ -1,13 +1,18 @@
 """Linked waveform and spectrum views with a shared timeline and playhead."""
+from __future__ import annotations
+
 from dataclasses import dataclass
 import math
+from typing import TYPE_CHECKING
 
-import numpy as np
 from PySide6.QtCore import QLineF, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from .dsp import SR
+from . import SR
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def clamp(value, low, high):
@@ -52,11 +57,17 @@ class Trace:
     def set_audio(self, audio, label=""):
         self.audio = audio
         self.label = label
-        self.peak = float(np.max(np.abs(audio), initial=0)) if audio is not None else 0
+        self.peak = 0
+        if audio is not None:
+            import numpy as np
+
+            self.peak = float(np.max(np.abs(audio), initial=0))
         self._spectrum = None
 
     def spectrum_db(self):
         if self._spectrum is None:
+            import numpy as np
+
             nfft = 1024
             audio = self.audio[:8 * SR]
             padded = np.pad(audio, (0, max(0, nfft - len(audio))))
@@ -191,6 +202,8 @@ class SignalTimeline(QWidget):
         for trace in (self.original, self.result):
             if trace.audio is None:
                 continue
+            import numpy as np
+
             data = trace.spectrum_db()
             bin_width = self._frequency_fit.end / (len(data) - 1)
             start, end = x.start / bin_width, x.end / bin_width
@@ -444,6 +457,8 @@ class SignalTimeline(QWidget):
             if traces:
                 self._draw_trace(painter, plot, x, y, traces[0], traces[0].color)
             return
+        import numpy as np
+
         scale = self.devicePixelRatioF()
         size = QSize(math.ceil(plot.width() * scale), math.ceil(plot.height() * scale))
         layer = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
@@ -459,6 +474,8 @@ class SignalTimeline(QWidget):
         painter.drawImage(plot.topLeft(), image)
 
     def _trace_mask(self, layer, plot, x, y, trace):
+        import numpy as np
+
         scale = layer.devicePixelRatio()
         width, height = layer.width(), layer.height()
         shape = self._spectrum_path(plot, trace, x, y) if self.spectrum else self._wave_shape(plot, trace.audio, x, y, scale)
@@ -484,6 +501,8 @@ class SignalTimeline(QWidget):
 
     def _blend_palette(self, colors):
         if self._blend_cache is None or self._blend_cache[0] != colors:
+            import numpy as np
+
             coverage = np.arange(256, dtype=np.float32) * (0.84 / 255)
             a, b = coverage[:, None], coverage[None, :]
             total = a + b
@@ -513,6 +532,8 @@ class SignalTimeline(QWidget):
                 point = points[0]
                 path.lineTo(point.x() + 0.6, point.y())
             return path
+
+        import numpy as np
 
         samples = audio[start:end]
         indices = np.arange(0, len(samples), step)

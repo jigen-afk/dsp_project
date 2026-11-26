@@ -26,24 +26,23 @@ try {
     $env:PATH = $dspOriginalPath
 }
 
-$dspToolRoot = Join-Path $dspBuild 'tools'
-$dspNsis = Join-Path $dspToolRoot 'nsis-3.13/makensis.exe'
-if (!(Test-Path -LiteralPath $dspNsis -PathType Leaf)) {
-    New-Item -ItemType Directory -Path $dspToolRoot -Force | Out-Null
-    $dspNsisZip = Join-Path $dspToolRoot 'nsis-3.13.zip'
-    $dspNsisUrl = 'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip'
-    $dspNsisHash = 'ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8'
-    Invoke-WebRequest -UseBasicParsing -Uri $dspNsisUrl -OutFile $dspNsisZip -TimeoutSec 90
-    if ((Get-FileHash -LiteralPath $dspNsisZip -Algorithm SHA256).Hash -ne $dspNsisHash) {
-        throw 'NSIS 构建工具校验失败'
-    }
-    Expand-Archive -LiteralPath $dspNsisZip -DestinationPath $dspToolRoot -Force
+$dspVsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+if (!(Test-Path -LiteralPath $dspVsWhere -PathType Leaf)) {
+    throw '构建便携 EXE 需要安装 Visual Studio C++ 生成工具和 Windows SDK'
 }
+$dspVs = & $dspVsWhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if ($LASTEXITCODE -ne 0 -or !$dspVs) {
+    throw '未找到用于构建便携 EXE 的 MSVC x64 工具链'
+}
+$dspLauncher = Join-Path $dspBuild 'launcher'
+New-Item -ItemType Directory -Path $dspLauncher -Force | Out-Null
 $dspPayload = Join-Path $dspBundle 'DSPStudio'
-$dspOutput = Join-Path $dspBuild 'DSPStudio.exe'
-& $dspNsis '/V2' "/DPAYLOAD=$dspPayload" "/DOUTPUT=$dspOutput" 'tools/portable.nsi'
-if ($LASTEXITCODE -ne 0) { throw '单文件压缩失败' }
+& $dspPython 'tools/pack_portable.py' $dspPayload (Join-Path $dspLauncher 'payload.bin')
+if ($LASTEXITCODE -ne 0) { throw '单文件资源压缩失败' }
+Set-Content -LiteralPath (Join-Path $dspLauncher 'portable.rc') -Encoding ascii -Value '1 RCDATA "payload.bin"'
+& 'tools/build_launcher.cmd' $dspVs $dspLauncher (Join-Path $PSScriptRoot 'tools/portable.cpp')
+if ($LASTEXITCODE -ne 0) { throw '单文件启动程序构建失败' }
 New-Item -ItemType Directory -Path 'dist' -Force | Out-Null
-Move-Item -LiteralPath $dspOutput -Destination 'dist/DSPStudio.exe' -Force
+Move-Item -LiteralPath (Join-Path $dspLauncher 'DSPStudio.exe') -Destination 'dist/DSPStudio.exe' -Force
 Write-Host ('Windows EXE {0:N1} MB' -f ((Get-Item -LiteralPath 'dist/DSPStudio.exe').Length / 1000000))
 Write-Host '构建完成。可直接运行或复制 dist\DSPStudio.exe。'

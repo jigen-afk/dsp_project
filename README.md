@@ -11,9 +11,9 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-Windows 10/11（64 位）可前往 [最新 Release](https://github.com/jigen-afk/dsp_project/releases/latest) 下载单文件 `DSPStudio.exe`，双击即可运行。请把文件放在可写目录，软件会在该目录保存本地数据。
+Windows 10/11（64 位）可前往 [最新 Release](https://github.com/jigen-afk/dsp_project/releases/latest) 下载单文件 `DSPStudio.exe`，双击即可运行。请把文件放在可写目录。新版本首次启动会在本地创建 `data/runtime/` 缓存，之后直接复用。关闭软件后可以删除这个缓存目录，程序会在下次启动时重建。
 
-从 `source` 运行 `powershell -File build.ps1` 也可在本机构建，生成的单文件位于 `source/dist/DSPStudio.exe`。构建脚本用 PyInstaller 收集运行库，再用 NSIS 的 LZMA 压缩生成单文件。启动时会临时解包，声纹、日志和默认导出目录位于 EXE 旁的 `data/`。
+从 `source` 运行 `powershell -File build.ps1` 也可在本机构建，生成的单文件位于 `source/dist/DSPStudio.exe`。构建需安装 Visual Studio C++ 生成工具和 Windows SDK。声纹、日志和默认导出目录位于 `data/`，音频库和 DSP 库在使用相应功能时加载。
 
 ## 自动构建和发布
 

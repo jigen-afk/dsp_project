@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -22,8 +23,9 @@ from .widgets import SignalTimeline
 def application_root():
     # Portable distribution: app/DSPStudio.exe with user data in sibling data/.
     if getattr(sys, "frozen", False):
-        exe = Path(sys.executable).resolve().parent
-        return exe.parent if exe.name.lower() == "app" else exe
+        portable_dir = os.environ.get("DSPSTUDIO_PORTABLE_DIR")
+        exe_dir = Path(portable_dir).resolve() if portable_dir else Path(sys.executable).resolve().parent
+        return exe_dir.parent if exe_dir.name.lower() == "app" else exe_dir
     return Path(__file__).resolve().parents[1]
 
 

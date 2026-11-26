@@ -1,5 +1,6 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM","offscreen")
+import sys
 import time
 import numpy as np
 import pytest
@@ -7,10 +8,25 @@ from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
-from dspstudio.app import MainWindow, configure_appearance
+from dspstudio.app import MainWindow, application_root, configure_appearance
 from dspstudio.diagnostics import synthetic_voice
 from dspstudio.dsp import SR
 from dspstudio.widgets import SignalTimeline
+
+
+def test_portable_data_root_is_next_to_the_outer_exe(tmp_path, monkeypatch):
+    download_dir = tmp_path / "下载目录"
+    extracted_exe = tmp_path / "temp" / "DSPStudio.exe"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(extracted_exe))
+    monkeypatch.setenv("DSPSTUDIO_PORTABLE_DIR", str(download_dir))
+    assert application_root() == download_dir
+
+    monkeypatch.setenv("DSPSTUDIO_PORTABLE_DIR", str(download_dir / "app"))
+    assert application_root() == download_dir
+
+    monkeypatch.delenv("DSPSTUDIO_PORTABLE_DIR")
+    assert application_root() == extracted_exe.parent
 
 
 def pump(app,window,timeout=20):

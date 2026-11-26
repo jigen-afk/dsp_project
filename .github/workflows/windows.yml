@@ -12,11 +12,13 @@ permissions:
 
 jobs:
   build:
-    name: Build and test Windows package
+    name: Build and test the standalone Windows EXE
     runs-on: windows-2025
     timeout-minutes: 25
     env:
       QT_QPA_PLATFORM: offscreen
+    outputs:
+      sha256: ${{ steps.self_test.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,13 +31,18 @@ jobs:
       - name: Run tests and build DSPStudio.exe
         shell: pwsh
         run: ./source/build.ps1
-      - name: Test the packaged EXE and create the ZIP
+      - name: Test the EXE by itself
+        id: self_test
         shell: pwsh
         run: |
-          $package = Join-Path $PWD 'source/dist/DSPStudio'
-          $report = Join-Path $env:RUNNER_TEMP 'dspstudio-self-check.json'
-          $process = Start-Process -FilePath (Join-Path $package 'DSPStudio.exe') `
-            -WorkingDirectory $package -ArgumentList "--self-test --report `"$report`"" `
+          $isolated = Join-Path $env:RUNNER_TEMP 'dspstudio-standalone'
+          New-Item -ItemType Directory -Path $isolated | Out-Null
+          $exe = Join-Path $isolated 'DSPStudio.exe'
+          Copy-Item -LiteralPath 'source/dist/DSPStudio.exe' -Destination $exe
+          $report = Join-Path $isolated 'self-check.json'
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $process = Start-Process -FilePath $exe `
+            -WorkingDirectory $isolated -ArgumentList "--self-test --report `"$report`"" `
             -WindowStyle Hidden -Wait -PassThru
           if (!(Test-Path -LiteralPath $report)) {
             throw "The packaged EXE did not produce a self-test report (exit $($process.ExitCode))."
@@ -45,21 +52,15 @@ jobs:
             throw 'The packaged EXE failed its self-test.'
           }
 
-          $archive = 'DSPStudio-Windows-x64.zip'
-          $level = [System.IO.Compression.CompressionLevel]::Optimal
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($package, (Join-Path $PWD $archive), $level, $true)
-          $sha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          [System.IO.File]::WriteAllText((Join-Path $PWD "$archive.sha256"), "$sha  $archive`n")
-      - name: Upload the Windows package
+          $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$sha" -Encoding utf8
+      - name: Upload DSPStudio.exe
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: DSPStudio-Windows-x64
-          path: |
-            DSPStudio-Windows-x64.zip
-            DSPStudio-Windows-x64.zip.sha256
+          path: source/dist/DSPStudio.exe
+          archive: false
           if-no-files-found: error
           overwrite: true
-          compression-level: 0
           retention-days: 14
 
   release:
@@ -76,9 +77,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: DSPStudio-Windows-x64
-      - name: Verify the ZIP checksum
-        run: sha256sum --check DSPStudio-Windows-x64.zip.sha256
+          name: DSPStudio.exe
+      - name: Verify the EXE checksum
+        env:
+          EXPECTED_SHA: ${{ needs.build.outputs.sha256 }}
+        run: printf '%s  DSPStudio.exe\n' "$EXPECTED_SHA" | sha256sum --check -
       - name: Publish the checked build as Latest
         shell: bash
         env:
@@ -100,7 +103,7 @@ jobs:
           fi
           if [[ "$draft" != true ]]; then
             notes=$(cat <<EOF
-          下载并完整解压 DSPStudio-Windows-x64.zip，然后运行 DSPStudio/DSPStudio.exe。请保留同目录的 _internal。
+          下载 DSPStudio.exe 后双击运行。支持 64 位 Windows 10/11，无需安装 Python 或解压文件。
 
           [源码提交]($GITHUB_SERVER_URL/$GH_REPO/commit/$GITHUB_SHA) · [构建与自检]($GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID)
           EOF
@@ -108,7 +111,7 @@ jobs:
             gh release create "$tag" --draft --target "$GITHUB_SHA" \
               --title "DSP Studio Windows (${GITHUB_SHA:0:12})" --notes "$notes"
           fi
-          gh release upload "$tag" DSPStudio-Windows-x64.zip DSPStudio-Windows-x64.zip.sha256 --clobber
+          gh release upload "$tag" DSPStudio.exe --clobber
 
           head_sha=$(gh api "$head_ref" --jq .object.sha)
           if [[ "$head_sha" != "$GITHUB_SHA" ]]; then

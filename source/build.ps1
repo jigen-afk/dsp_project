@@ -16,9 +16,13 @@ try {
     # Qt uses the Windows system ICU ABI. Poppler's versioned ICU has the same
     # filename but incompatible exports; prevent dependency scanning from taking it.
     $env:PATH = (($env:PATH -split ';') | Where-Object { $_ -notmatch '(?i)poppler' }) -join ';'
-    & $dspPython -m PyInstaller --noconfirm --clean --onedir --windowed --name DSPStudio --exclude-module matplotlib --exclude-module pandas --exclude-module torch --exclude-module sklearn --exclude-module pytest --exclude-module IPython --exclude-module tkinter --exclude-module numba --exclude-module cv2 --exclude-module sphinx --exclude-module docutils --exclude-module PIL --exclude-module pygments --exclude-module babel --exclude-module jinja2 main.py
+    & $dspPython -m PyInstaller --noconfirm --clean --onefile --windowed --name DSPStudio `
+        --exclude-module matplotlib --exclude-module pandas --exclude-module torch --exclude-module sklearn `
+        --exclude-module pytest --exclude-module IPython --exclude-module tkinter --exclude-module numba `
+        --exclude-module cv2 --exclude-module sphinx --exclude-module docutils --exclude-module PIL `
+        --exclude-module pygments --exclude-module babel --exclude-module jinja2 main.py
     if ($LASTEXITCODE -ne 0) { throw '打包失败' }
 } finally {
     $env:PATH = $dspOriginalPath
 }
-Write-Host '构建完成：dist\DSPStudio\DSPStudio.exe。移动整个 DSPStudio 文件夹，不能只复制 exe。'
+Write-Host '构建完成。可直接运行或复制 dist\DSPStudio.exe。'

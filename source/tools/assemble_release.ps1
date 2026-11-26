@@ -2,12 +2,17 @@ param([Parameter(Mandatory=$true)][string]$Destination)
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
 $release = [System.IO.Path]::GetFullPath($Destination)
+$executable = Join-Path $project 'dist\DSPStudio.exe'
+if (!(Test-Path -LiteralPath $executable -PathType Leaf)) {
+    throw '请先运行 build.ps1 生成 dist\DSPStudio.exe。'
+}
 if ((Test-Path -LiteralPath $release) -and @(Get-ChildItem -LiteralPath $release -Force).Count -gt 0) {
     throw "交付目录非空，为保护已有数据不覆盖：$release"
 }
 New-Item -ItemType Directory -Path $release -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $release 'source') | Out-Null
-Copy-Item -LiteralPath (Join-Path $project 'dist\DSPStudio') -Destination (Join-Path $release 'app') -Recurse
+New-Item -ItemType Directory -Path (Join-Path $release 'app') | Out-Null
+Copy-Item -LiteralPath $executable -Destination (Join-Path $release 'app')
 foreach ($folder in @('dspstudio','tests','tools')) {
     $target = Join-Path $release "source\$folder"
     New-Item -ItemType Directory -Path $target | Out-Null
@@ -30,7 +35,7 @@ $readme = @'
 数字音效实验室 DSP Studio
 
 双击“启动软件.cmd”开始使用，也可运行 app\DSPStudio.exe。
-无需安装 Python。请保留整个 app 文件夹。
+DSPStudio.exe 可独立运行，无需安装 Python。
 
 必做功能：麦克风实录、语音增强、回声产生与消除、项目组成员说话人识别。
 附加功能：波形/频谱、变速变调、机器人音、电话音、音量调整、WAV 导入导出。

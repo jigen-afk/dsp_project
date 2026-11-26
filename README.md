@@ -11,14 +11,14 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-Windows 10/11（64 位）可前往 [最新 Release](https://github.com/jigen-afk/dsp_project/releases/latest) 下载 `DSPStudio-Windows-x64.zip`。完整解压后运行 `DSPStudio/DSPStudio.exe`，并保留同目录的 `_internal`。
+Windows 10/11（64 位）可前往 [最新 Release](https://github.com/jigen-afk/dsp_project/releases/latest) 下载单文件 `DSPStudio.exe`，双击即可运行。请把文件放在可写目录，软件会在该目录保存本地数据。
 
-从 `source` 运行 `powershell -File build.ps1` 也可在本机构建，入口为 `source/dist/DSPStudio/DSPStudio.exe`。仓库随附的既有便携包位于 `app/`。
+从 `source` 运行 `powershell -File build.ps1` 也可在本机构建，生成的单文件位于 `source/dist/DSPStudio.exe`。
 
 ## 自动构建和发布
 
-- PR 提交后，[Windows build and release](https://github.com/jigen-afk/dsp_project/actions/workflows/windows.yml) 会运行源码测试和打包版自检。通过后可在对应运行记录的 **Artifacts** 下载试用包。
-- PR 合入默认分支后会再构建一次。测试通过后，工作流把 ZIP 和 SHA-256 校验文件发布到 **Latest Release**，无需手动打标签、配置发布密钥或上传 EXE。默认分支的直接提交也走同一流程。
+- PR 提交后，[Windows build and release](https://github.com/jigen-afk/dsp_project/actions/workflows/windows.yml) 会运行源码测试，再把构建出的 EXE 放到空目录里自检。通过后可在对应运行记录的 **Artifacts** 下载单文件试用版。
+- PR 合入默认分支后会再构建一次。测试通过后，工作流校验 EXE 的 SHA-256，自动将 `DSPStudio.exe` 发布到 **Latest Release**。默认分支的直接提交也走同一流程。
 
 ## 一、采集实际环境语音
 
@@ -106,11 +106,11 @@ Windows 10/11（64 位）可前往 [最新 Release](https://github.com/jigen-afk
 | NLMS | 固定扬声器与麦克风、远端单讲校准；另做双讲 | 远端单讲 ERLE、双讲本地语音保留 |
 | 成员识别 | 每人独立测试至少 10 段，不与注册文件重复 | 正确数/总数、混淆矩阵、噪声条件 |
 
-命令行自检（完成后退出，结果写 JSON）：
+在 `DSPStudio.exe` 所在目录执行命令行自检，完成后退出并将结果写入 JSON。
 
 ```text
-app\DSPStudio.exe --self-test --report verification\manual_self_check.json
-app\DSPStudio.exe --self-test --hardware --report verification\manual_hardware_check.json
+.\DSPStudio.exe --self-test --report verification\manual_self_check.json
+.\DSPStudio.exe --self-test --hardware --report verification\manual_hardware_check.json
 ```
 
 `--hardware` 会短暂打开默认麦克风，并播放低音量短测试音，不保存采集内容。默认自检不访问音频设备。源码测试：`python -m pytest tests -q`。打包：在 source 中执行 `powershell -File build.ps1`。
@@ -127,7 +127,7 @@ app\DSPStudio.exe --self-test --hardware --report verification\manual_hardware_c
 ```text
 D:/dsp/
   使用说明.md
-  app/              可直接运行的 exe 及动态库
+  app/              随仓库保留的旧版便携包
   source/           Python 源码、测试、构建脚本
   samples/          合成实验样例（明确标注）
   verification/     测试证据与界面截图

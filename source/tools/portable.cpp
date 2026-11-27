@@ -134,11 +134,34 @@ struct StagingDirectory {
     }
 };
 
+struct CacheLock {
+    HANDLE file;
+
+    explicit CacheLock(const fs::path& path) :
+        file(CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                        FILE_ATTRIBUTE_NORMAL, nullptr)) {
+        if (file == INVALID_HANDLE_VALUE) {
+            throw std::runtime_error("Cannot open the application cache lock.");
+        }
+        OVERLAPPED region{};
+        if (!LockFileEx(file, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &region)) {
+            CloseHandle(file);
+            throw std::runtime_error("Cannot lock the application cache.");
+        }
+    }
+
+    CacheLock(const CacheLock&) = delete;
+    CacheLock& operator=(const CacheLock&) = delete;
+    ~CacheLock() { CloseHandle(file); }
+};
+
 fs::path prepare_cache(const Payload& archive, const fs::path& data_root) {
     const auto runtime = data_root / L"runtime";
     const auto directory = runtime / archive.cache_id;
+    fs::create_directories(runtime);
+    const CacheLock lock(runtime / (archive.cache_id + L".lock"));
     if (!ready(directory)) {
-        fs::create_directories(runtime);
         const StagingDirectory staging(runtime);
         unpack(archive, staging.path);
         std::ofstream marker(staging.path / L".complete");
@@ -146,12 +169,9 @@ fs::path prepare_cache(const Payload& archive, const fs::path& data_root) {
         if (!marker || !ready(staging.path)) {
             throw std::runtime_error("Cannot finish writing the application cache.");
         }
-        // A second launch may have published the same complete cache while we unpacked.
-        std::error_code error;
-        fs::rename(staging.path, directory, error);
-        if (error && !ready(directory)) {
-            throw std::runtime_error("Cannot activate the application cache.");
-        }
+        // Publish only after extraction succeeds. Other launchers hold the same lock.
+        fs::remove_all(directory);
+        fs::rename(staging.path, directory);
     }
     return directory / L"DSPStudio.exe";
 }

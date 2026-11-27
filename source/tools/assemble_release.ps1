@@ -22,7 +22,10 @@ foreach ($filename in @('main.py','requirements.txt','requirements-lock.txt','bu
     Copy-Item -LiteralPath (Join-Path $project $filename) -Destination (Join-Path $release 'source')
 }
 foreach ($folder in @('samples','verification')) {
-    Copy-Item -LiteralPath (Join-Path $project $folder) -Destination (Join-Path $release $folder) -Recurse
+    $optional = Join-Path $project $folder
+    if (Test-Path -LiteralPath $optional -PathType Container) {
+        Copy-Item -LiteralPath $optional -Destination (Join-Path $release $folder) -Recurse
+    }
 }
 Copy-Item -LiteralPath (Join-Path $project '使用说明.md') -Destination $release
 $launcher = @'
@@ -44,7 +47,7 @@ DSPStudio.exe 可独立运行，无需安装 Python。
 本版为录音后处理；真实声学回声消除需要远端参考及安静校准时段。
 
 使用说明.md：操作、算法、实验方法、常见问题。
-source：源码与测试。samples：合成实验音频。verification：本次测试证据。
+source：源码与测试。若随包提供，samples 存放合成实验音频，verification 存放测试证据。
 data：启动后自动生成的本地声纹、日志和默认导出目录。
 '@
 [System.IO.File]::WriteAllText((Join-Path $release '先读我.txt'),$readme,[System.Text.UTF8Encoding]::new($true))

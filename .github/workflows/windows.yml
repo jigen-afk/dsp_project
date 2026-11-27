@@ -65,9 +65,24 @@ jobs:
           if ((Get-Item -LiteralPath $marker -Force).LastWriteTimeUtc -ne $created) {
             throw 'The second launch did not reuse its runtime cache.'
           }
+          Remove-Item -LiteralPath $marker -Force
+          Test-DspExecutable (Join-Path $isolated 'self-check-recovered.json')
+          if (!(Test-Path -LiteralPath $marker -PathType Leaf)) {
+            throw 'The launcher did not restore the damaged runtime cache.'
+          }
 
           $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$sha" -Encoding utf8
+      - name: Assemble a release from the clean checkout
+        shell: pwsh
+        run: |
+          $release = Join-Path $env:RUNNER_TEMP 'dspstudio-release'
+          ./source/tools/assemble_release.ps1 -Destination $release
+          foreach ($file in @('app/DSPStudio.exe', '启动软件.cmd', 'release_manifest.json')) {
+            if (!(Test-Path -LiteralPath (Join-Path $release $file) -PathType Leaf)) {
+              throw "Missing release file: $file"
+            }
+          }
       - name: Upload DSPStudio.exe
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

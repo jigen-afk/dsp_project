@@ -2,11 +2,7 @@
 from dataclasses import dataclass
 from math import gcd
 import numpy as np
-from scipy import signal
-from scipy.ndimage import gaussian_filter
-
-SR = 16000
-MAX_SECONDS = 300
+from . import SR, MAX_SECONDS
 
 
 def mono_audio(data, sr=SR):
@@ -22,8 +18,10 @@ def mono_audio(data, sr=SR):
     if len(x) / sr > MAX_SECONDS:
         raise ValueError(f"单段音频最多 {MAX_SECONDS} 秒，请先裁剪")
     if int(sr) != SR:
+        from scipy.signal import resample_poly
+
         g = gcd(int(sr), SR)
-        x = signal.resample_poly(x, SR // g, int(sr) // g)
+        x = resample_poly(x, SR // g, int(sr) // g)
     # Preserve amplitude; hard clipping here would corrupt acoustic echo references.
     return x.astype(np.float32)
 
@@ -53,6 +51,9 @@ def enhance(x, strength=1.0, noise_seconds=0.4, profile=None):
         raise ValueError("降噪强度应在 0～3 之间")
     if strength == 0:
         return x.copy()
+    from scipy import signal
+    from scipy.ndimage import gaussian_filter
+
     _, _, z = signal.stft(x, fs=SR, nperseg=512, noverlap=384, boundary="zeros")
     p = np.abs(z) ** 2
     if profile is not None:
@@ -93,11 +94,13 @@ def echo_kernel(config):
 
 
 def add_echo(x, config=EchoConfig()):
+    from scipy.signal import fftconvolve
+
     x = mono_audio(x)
     h = echo_kernel(config)
     if (len(x) + len(h) - 1) / SR > MAX_SECONDS:
         raise ValueError("加入回声后超过 300 秒，请缩短原音或回声尾音")
-    out = signal.fftconvolve(x, h)
+    out = fftconvolve(x, h)
     scale = max(1.0, float(np.max(np.abs(out))) / 0.98)
     return (out / scale).astype(np.float32), scale
 
@@ -125,9 +128,11 @@ def estimate_delay(mic, reference, max_delay_ms=1200):
     n = min(len(mic), len(reference), SR * 8)
     if n < 256 or rms(reference[:n]) < 1e-5:
         raise ValueError("参考信号太短或接近静音")
-    a = signal.resample_poly(mic[:n], 1, 4)
-    b = signal.resample_poly(reference[:n], 1, 4)
-    corr = signal.correlate(a, b, mode="full", method="fft")
+    from scipy.signal import correlate, resample_poly
+
+    a = resample_poly(mic[:n], 1, 4)
+    b = resample_poly(reference[:n], 1, 4)
+    corr = correlate(a, b, mode="full", method="fft")
     zero = len(b) - 1
     limit = min(round(max_delay_ms * SR / 4000), len(corr) - zero - 1)
     lag = int(np.argmax(np.abs(corr[zero:zero+limit+1]))) * 4
@@ -135,6 +140,16 @@ def estimate_delay(mic, reference, max_delay_ms=1200):
     candidates = range(max(0, lag-4), lag+5)
     best = max(candidates, key=lambda k: abs(float(np.dot(mic[k:n], reference[:n-k]))))
     return best
+
+
+def _aec_validation_window(aligned, start, end):
+    length = min(SR // 2, (end - start) // 4)
+    minimum_level = max(1e-5, 0.1 * rms(aligned[start:end]))
+    for stop in (end, end - length):
+        begin = stop - length
+        if rms(aligned[begin:stop]) >= minimum_level:
+            return begin, stop
+    raise ValueError("校准后半段缺少参考声音。请使用连续有声的参考音频，或调整校准时长后重试。")
 
 
 def cancel_echo(mic, reference, delay_ms=None, taps=512, mu=0.35, calibration_seconds=2.0, progress=None):
@@ -160,8 +175,24 @@ def cancel_echo(mic, reference, delay_ms=None, taps=512, mu=0.35, calibration_se
     cal_end = min(len(mic), delay + round(calibration_seconds * SR))
     if cal_end - delay < SR // 2:
         raise ValueError("至少需要 0.5 秒有效校准音频")
+    check_start, check_end = _aec_validation_window(aligned, delay, cal_end)
+    from scipy.signal import lfilter
+
+    calibration_reduction = 0.0
     floor = max(1e-9, rms(aligned) ** 2 * taps * 0.001)
     for i in range(len(mic)):
+        if i == check_start:
+            # Check the current filter on samples it has not learned from yet.
+            history = max(0, i - taps + 1)
+            predicted = lfilter(weights, [1], aligned[history:check_end])[-(check_end - i):]
+            observed = mic[i:check_end]
+            level = rms(observed)
+            if level < 1e-5:
+                raise ValueError("校准片段几乎静音。请检查扬声器音量、麦克风和参考音频。")
+            calibration_reduction = float(20 * np.log10(level / max(rms(observed - predicted), 1e-10)))
+            if calibration_reduction < 0.5:
+                raise ValueError(f"校准验证未测到足够的回声降低（{calibration_reduction:.2f} dB）。"
+                                 "请确认参考对应这次播放，并在校准时保持安静后重录。")
         u = padded[i:i+taps][::-1]
         error = float(mic[i]) - float(weights @ u)
         out[i] = error
@@ -174,6 +205,7 @@ def cancel_echo(mic, reference, delay_ms=None, taps=512, mu=0.35, calibration_se
     # Reduction is only an energy ratio; near-end speech makes it different from true ERLE.
     reduction = 20*np.log10(max(rms(mic[start:]), 1e-10) / max(rms(out[start:]), 1e-10))
     return safe_output(out), {"delay_ms": delay * 1000 / SR, "energy_reduction_db": float(reduction),
+                              "calibration_reduction_db": calibration_reduction,
                               "calibration_seconds": calibration_seconds, "taps": taps}
 
 
@@ -188,11 +220,15 @@ def effect(x, name, amount):
             raise ValueError("倍率应在 0.5～2 之间")
         if len(x) / SR / rate > MAX_SECONDS:
             raise ValueError("变速后超过 300 秒")
-        return safe_output(signal.resample_poly(x, 100, round(rate*100)))
+        from scipy.signal import resample_poly
+
+        return safe_output(resample_poly(x, 100, round(rate*100)))
     if name == "机器人音":
         carrier = np.sin(2*np.pi*float(amount)*np.arange(len(x))/SR)
         return safe_output(x * carrier)
     if name == "电话音":
-        sos = signal.butter(5, [300, 3400], btype="bandpass", fs=SR, output="sos")
-        return safe_output(signal.sosfilt(sos, x))
+        from scipy.signal import butter, sosfilt
+
+        sos = butter(5, [300, 3400], btype="bandpass", fs=SR, output="sos")
+        return safe_output(sosfilt(sos, x))
     raise ValueError("未知音效")

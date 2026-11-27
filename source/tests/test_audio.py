@@ -1,4 +1,5 @@
 import numpy as np
+import sounddevice as sd
 import soundfile as sf
 from dspstudio.audio import read_audio, write_audio, AudioEngine
 from dspstudio.dsp import SR
@@ -28,3 +29,14 @@ def test_capture_callback_copies_buffers_and_enforces_limit():
     engine.frames=16000*300-10
     engine._capture(np.zeros((320,1),dtype=np.float32),False)
     assert engine.frames==16000*300 and engine.done
+
+
+def test_play_from_sample_retains_full_recording_gain(monkeypatch):
+    played = []
+    monkeypatch.setattr(sd, "query_devices", lambda *_: {"default_samplerate": SR})
+    monkeypatch.setattr(sd, "stop", lambda: None)
+    monkeypatch.setattr(sd, "play", lambda samples, **_: played.append(samples.copy()))
+    monkeypatch.setattr(sd, "get_stream", lambda: None)
+    engine = AudioEngine()
+    engine.play(np.array([2, 0.5, -0.5], dtype=np.float32), volume=0.8, start_sample=1)
+    np.testing.assert_allclose(played[0], [0.196, -0.196], atol=1e-6)

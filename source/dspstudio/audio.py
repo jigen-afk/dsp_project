@@ -1,14 +1,13 @@
 """Microphone, speaker and synchronized acoustic-echo capture."""
 import threading
 from math import gcd
-import numpy as np
-import sounddevice as sd
-import soundfile as sf
-from scipy.signal import resample_poly
-from .dsp import SR, MAX_SECONDS, mono_audio, safe_output
+from . import SR, MAX_SECONDS
 
 
 def read_audio(path):
+    import soundfile as sf
+    from .dsp import mono_audio
+
     info = sf.info(str(path))
     if info.duration > MAX_SECONDS:
         raise ValueError("单段音频最多 300 秒")
@@ -17,15 +16,22 @@ def read_audio(path):
 
 
 def write_audio(path, data):
+    import soundfile as sf
+    from .dsp import safe_output
+
     sf.write(str(path), safe_output(data), SR, subtype="PCM_16", format="WAV")
 
 
 def resample(data, source, target):
     source, target = int(source), int(target)
     if source == target:
+        import numpy as np
+
         return np.asarray(data, dtype=np.float32)
+    from scipy.signal import resample_poly
+
     g = gcd(source, target)
-    return resample_poly(data, target//g, source//g).astype(np.float32)
+    return resample_poly(data, target//g, source//g).astype("float32")
 
 
 class AudioEngine:
@@ -40,12 +46,23 @@ class AudioEngine:
         self.warning = ""
         self.rate = SR
         self.reference = None
+        self.preview_stream = None
 
     @staticmethod
     def devices():
+        import sounddevice as sd
+
         return list(sd.query_devices())
 
+    @staticmethod
+    def host_apis():
+        import sounddevice as sd
+
+        return [api["name"] for api in sd.query_hostapis()]
+
     def _capture(self, data, status):
+        import numpy as np
+
         if status:
             self.warning = str(status)
         with self.lock:
@@ -60,7 +77,7 @@ class AudioEngine:
     def _prepare(self, mode):
         if self.stream:
             raise ValueError("请先停止当前录音")
-        sd.stop()
+        self.stop_playback()
         self.chunks = []
         self.frames = 0
         self.level = 0
@@ -69,6 +86,8 @@ class AudioEngine:
         self.mode = mode
 
     def start_recording(self, device=None):
+        import sounddevice as sd
+
         self._prepare("record")
         try:
             self.rate = int(sd.query_devices(device, "input")["default_samplerate"])
@@ -84,6 +103,10 @@ class AudioEngine:
             raise
 
     def start_acoustic(self, reference, input_device=None, output_device=None, volume=0.6):
+        import numpy as np
+        import sounddevice as sd
+        from .dsp import safe_output
+
         self._prepare("acoustic")
         try:
             # Try the preferred rate then common rates shared by both devices.
@@ -137,6 +160,9 @@ class AudioEngine:
         self.mode = None
 
     def stop_recording(self):
+        import numpy as np
+        from .dsp import mono_audio
+
         if not self.stream:
             raise ValueError("当前没有录音")
         stream = self.stream
@@ -152,12 +178,35 @@ class AudioEngine:
             data = np.concatenate(self.chunks)
         return mono_audio(data, self.rate)
 
-    def play(self, data, device=None, volume=0.8):
+    def play(self, data, device=None, volume=0.8, *, start_sample=0):
+        import sounddevice as sd
+        from .dsp import safe_output
+
         if self.stream:
             raise ValueError("请先停止录音再试听")
         rate = int(sd.query_devices(device,"output")["default_samplerate"])
+        self.stop_playback()
+        audio = safe_output(data)[start_sample:] * volume
+        sd.play(resample(audio, SR, rate), samplerate=rate, device=device)
+        self.preview_stream = sd.get_stream()
+
+    def is_playing(self):
+        if self.preview_stream is None:
+            return False
+        import sounddevice as sd
+
+        try:
+            return bool(self.preview_stream.active)
+        except sd.PortAudioError:
+            return False
+
+    def stop_playback(self):
+        if self.preview_stream is None:
+            return
+        import sounddevice as sd
+
         sd.stop()
-        sd.play(resample(safe_output(data)*volume, SR, rate), samplerate=rate, device=device)
+        self.preview_stream = None
 
     def close(self):
         if self.stream:
@@ -165,4 +214,4 @@ class AudioEngine:
             self.stream.close()
             self.stream = None
         self.mode = None
-        sd.stop()
+        self.stop_playback()

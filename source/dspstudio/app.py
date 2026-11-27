@@ -1,31 +1,30 @@
-import json
 import logging
+import math
 import os
 import sys
 import time
-import traceback
 from pathlib import Path
-import numpy as np
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QComboBox, QDoubleSpinBox, QSpinBox, QTabWidget,
-    QGroupBox, QFileDialog, QMessageBox, QLineEdit, QListWidget, QCheckBox,
-    QProgressBar, QPlainTextEdit, QSplitter, QScrollArea,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QComboBox, QDoubleSpinBox, QSpinBox, QTabBar,
+    QBoxLayout, QButtonGroup, QDialog, QFrame, QFormLayout, QGridLayout, QFileDialog, QMessageBox, QLineEdit,
+    QListWidget, QCheckBox, QMenu, QSizePolicy, QProgressBar, QPlainTextEdit,
+    QScrollArea, QStackedWidget, QToolButton,
 )
-from . import __version__
-from .dsp import SR, rms, audio_stats, enhance, EchoConfig, add_echo, undo_echo, cancel_echo, effect
+from . import SR
 from .audio import AudioEngine, read_audio, write_audio
 from .speaker import SpeakerStore
-from .widgets import SignalPlot
+from .widgets import SignalTimeline, clamp
 
 
 def application_root():
     # Portable distribution: app/DSPStudio.exe with user data in sibling data/.
     if getattr(sys, "frozen", False):
-        exe = Path(sys.executable).resolve().parent
-        return exe.parent if exe.name.lower() == "app" else exe
+        portable_dir = os.environ.get("DSPSTUDIO_PORTABLE_DIR")
+        exe_dir = Path(portable_dir).resolve() if portable_dir else Path(sys.executable).resolve().parent
+        return exe_dir.parent if exe_dir.name.lower() == "app" else exe_dir
     return Path(__file__).resolve().parents[1]
 
 
@@ -48,30 +47,154 @@ class Task(QThread):
 
 
 STYLE = """
-QWidget { background: #0b1322; color: #dce6f3; font-family: 'Microsoft YaHei UI'; font-size: 10pt; }
-QMainWindow { background: #0b1322; }
-QLabel#brand { font-size: 22pt; font-weight: 700; color: #f2f7ff; }
-QLabel#tagline { color: #8e9fb5; }
-QGroupBox { border: 1px solid #2a3b54; border-radius: 9px; margin-top: 12px; padding: 16px 12px 12px; font-weight: 600; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #91a7c4; }
-QPushButton { background: #1b2b43; border: 1px solid #304763; border-radius: 6px; padding: 8px 14px; min-height: 19px; }
-QPushButton:hover { background: #263c58; border-color: #5eead4; }
-QPushButton:pressed { background: #34516c; }
-QPushButton:disabled { color: #5d6d82; background: #142036; border-color: #1e3048; }
-QPushButton#primary { background: #157f72; color: white; border-color: #299e8f; font-weight: 700; }
-QPushButton#record { background: #963d55; border-color: #bb5b72; color: white; }
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background: #142237; border: 1px solid #30445f; border-radius: 5px; padding: 6px; min-height: 21px; }
-QComboBox QAbstractItemView { background: #192a41; selection-background-color: #257f77; }
-QTabWidget::pane { border: 1px solid #283a53; border-radius: 6px; padding: 8px; }
-QTabBar::tab { background: #142137; color: #92a7c2; padding: 11px 23px; margin-right: 3px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
-QTabBar::tab:selected { background: #203a4b; color: #72f1d7; }
-QPlainTextEdit, QListWidget { background: #101b2c; border: 1px solid #2a3b54; border-radius: 5px; padding: 5px; }
-QProgressBar { background: #142237; border: none; border-radius: 4px; text-align: center; min-height: 10px; }
-QProgressBar::chunk { background: #36bfa8; border-radius: 4px; }
-QCheckBox { spacing: 7px; }
-QStatusBar { color: #8e9fb5; }
-QSplitter::handle { background: #20314a; height: 4px; }
+QMainWindow, QDialog { background: #f5f5f7; }
+QWidget { color: #1d1d1f; }
+QFrame#toolbar, QFrame#controls {
+    background: #ffffff; border: 1px solid #dedee3; border-radius: 15px;
+}
+QFrame#monitor { background: #20222a; border-radius: 15px; }
+QFrame#segments { background: #e9e9ed; border-radius: 12px; }
+QFrame#monitorSegments { background: #35353c; border-radius: 11px; }
+QLabel#brand { font-size: 23pt; font-weight: 600; }
+QLabel#sectionTitle { font-size: 20pt; font-weight: 500; }
+QLabel#sectionLabel { color: #414148; }
+QLabel#hint, QLabel#metadata { color: #515159; font-size: 13pt; }
+QLabel#monitorMeta { color: #c7c7ce; font-size: 12pt; }
+QLabel#axisLabel { color: #515159; font-size: 12pt; }
+QLabel#operation { color: #414148; font-size: 13pt; }
+QLabel#operation[error="true"] { color: #a51e2b; }
+QLabel#speakerResult { color: #0054b8; font-size: 17pt; }
+QPushButton, QToolButton {
+    background: #f4f4f6; border: 1px solid #e1e1e5; border-radius: 10px;
+    padding: 7px 12px; min-height: 28px;
+}
+QPushButton:hover, QToolButton:hover { background: #eaeaf0; border-color: #d0d0d7; }
+QPushButton:pressed, QToolButton:pressed { background: #dfdfe6; }
+QPushButton:focus, QToolButton:focus { border-color: #005abc; }
+QPushButton:disabled, QToolButton:disabled { background: #efeff2; color: #62626a; border-color: #e5e5e8; }
+QPushButton#effectChoice:checked { background: #e8f1ff; color: #004b9e; border-color: #8bb6ee; }
+QPushButton#primary { background: #005ac6; color: #ffffff; border-color: #005ac6; }
+QPushButton#primary:hover { background: #004da9; border-color: #004da9; }
+QPushButton#primary:pressed { background: #003d88; }
+QPushButton#primary:focus { border-color: #002c62; }
+QPushButton#primary:disabled { background: #e9ebef; color: #60616a; border-color: #e0e1e5; }
+QPushButton#record { background: #fff0f0; color: #a51e2b; border-color: #f0cfd0; }
+QPushButton#record:hover, QPushButton#record:focus { background: #fbe4e5; border-color: #bf4952; }
+QPushButton#record:disabled { background: #efeff2; color: #62626a; border-color: #e5e5e8; }
+QPushButton#recording { color: white; background: #aa2332; border-color: #aa2332; }
+QPushButton#recording:hover, QPushButton#recording:focus { background: #8d1927; border-color: #70141f; }
+QToolButton#textButton { background: transparent; border-color: transparent; color: #0054b8; padding: 3px 6px; }
+QToolButton#textButton:hover, QToolButton#textButton:focus { background: #e8f1ff; border-color: #a2c4ee; }
+QToolButton#exportMenu { padding-right: 25px; }
+QToolButton#exportMenu::menu-indicator { subcontrol-position: right center; right: 9px; }
+QMenu { background: #ffffff; border: 1px solid #dedee3; padding: 5px; }
+QMenu::item { padding: 8px 20px; }
+QMenu::item:selected { background: #e8f1ff; color: #003e85; }
+QMenu::item:disabled { color: #62626a; }
+QToolButton#plotFocus {
+    background: #30323c; color: #e1e3eb; border-color: #444753;
+    min-height: 24px; padding: 4px 9px; font-size: 12pt;
+}
+QToolButton#plotFocus:hover, QToolButton#plotFocus:checked { background: #494d60; border-color: #7883a0; }
+QToolButton#axisTool { min-height: 22px; padding: 4px 7px; font-size: 13pt; }
+QToolButton#spectrumFit { min-height: 22px; padding: 4px 3px; font-size: 12pt; color: #0054ac; }
+QToolButton#zoomLink { min-height: 22px; padding: 4px 6px; font-size: 12pt; }
+QToolButton#zoomLink:checked { background: #e0edff; color: #004786; border-color: #84ade2; }
+QPushButton#timelinePlay {
+    color: white; background: #005ac6; border-color: #005ac6;
+    min-height: 24px; padding: 4px 11px;
+}
+QPushButton#timelinePlay:hover { background: #004da9; }
+QPushButton#timelinePlay:focus { border-color: #002c62; }
+QPushButton#timelinePlay:disabled { background: #e9ebef; color: #60616a; border-color: #e0e1e5; }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    background: #ffffff; border: 1px solid #c9c9d1; border-radius: 9px;
+    padding: 5px 9px; min-height: 25px; selection-background-color: #dbeaff;
+    selection-color: #1d1d1f;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #005abc; }
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled { background: #f0f0f3; color: #60616a; }
+QLineEdit#timelinePosition { padding: 3px 6px; min-height: 23px; font-size: 12pt; }
+QComboBox { padding-right: 10px; }
+QComboBox::drop-down {
+    subcontrol-origin: padding; subcontrol-position: top right; width: 25px;
+    background: #f4f4f6; border-top-right-radius: 8px; border-bottom-right-radius: 8px;
+}
+QComboBox::down-arrow {
+    image: url(:/qt-project.org/styles/commonstyle/images/arrow-down-16.png);
+    width: 12px; height: 12px;
+}
+QSpinBox, QDoubleSpinBox { padding-right: 9px; }
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: padding; subcontrol-position: top right; width: 23px;
+    background: #f4f4f6; border-top-right-radius: 8px; border-bottom: 1px solid #dedee3;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: padding; subcontrol-position: bottom right; width: 23px;
+    background: #f4f4f6; border-bottom-right-radius: 8px;
+}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(:/qt-project.org/styles/commonstyle/images/arrow-up-16.png);
+    width: 10px; height: 10px;
+}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(:/qt-project.org/styles/commonstyle/images/arrow-down-16.png);
+    width: 10px; height: 10px;
+}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled { image: none; }
+QComboBox::drop-down:hover, QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #e5e5ea; }
+QComboBox QAbstractItemView { background: #ffffff; selection-background-color: #e8f1ff; selection-color: #003e85; }
+QTabBar::tab {
+    background: transparent; color: #44444c; border: 1px solid transparent;
+    border-radius: 9px; padding: 5px 11px; min-height: 26px;
+}
+QTabBar#modeTabs { font-weight: 700; }
+QTabBar#modeTabs::tab { padding: 6px 13px; min-height: 30px; }
+QTabBar::tab:hover { background: #dedee4; }
+QTabBar::tab:selected { background: #ffffff; color: #004fa9; border-color: #d1d1d8; }
+QTabBar::tab:focus { border-color: #005abc; }
+QTabBar#modeTabs::tab:selected { background: #005ac6; color: #ffffff; border-color: #005ac6; }
+QTabBar#modeTabs::tab:selected:focus { border-color: #002c62; }
+QTabBar::tab:disabled { color: #60616a; }
+QTabBar::tab:selected:disabled { background: transparent; border-color: transparent; color: #60616a; }
+QTabBar#auditionTabs::tab { padding: 3px 7px; min-height: 22px; }
+QTabBar#auditionTabs::tab:selected { background: #005ac6; color: #ffffff; border-color: #005ac6; }
+QTabBar#auditionTabs::tab:selected:disabled { background: transparent; color: #60616a; border-color: transparent; }
+QTabBar#displayTabs::tab, QTabBar#compareTabs::tab {
+    padding: 3px 7px; min-height: 23px; color: #e1e1e8; font-size: 12pt;
+}
+QTabBar#displayTabs::tab { font-size: 13pt; }
+QTabBar#displayTabs::tab:hover, QTabBar#compareTabs::tab:hover { background: #474850; }
+QTabBar#displayTabs::tab:selected { background: #005ac6; color: #ffffff; border-color: #005ac6; }
+QTabBar#compareTabs::tab:selected {
+    background: #60636f; color: #ffffff; border-color: #777a88;
+}
+QTabBar#displayTabs::tab:focus, QTabBar#compareTabs::tab:focus { border-color: #a0c6ff; }
+QPlainTextEdit, QListWidget {
+    background: #f5f5f7; border: 1px solid #dedee3; border-radius: 9px; padding: 5px;
+    selection-background-color: #dbeaff; selection-color: #003e85;
+}
+QListWidget::item { padding: 6px; }
+QProgressBar { background: #e2e2e8; border: 0; border-radius: 5px; text-align: center; min-height: 10px; }
+QProgressBar::chunk { background: #005ac6; border-radius: 5px; }
+QProgressBar#inputMeter::chunk { background: #aa2332; }
+QCheckBox { spacing: 8px; min-height: 28px; }
+QCheckBox::indicator { width: 17px; height: 17px; }
+QScrollArea { border: none; background: transparent; }
+QWidget#controlForm { background: #ffffff; }
+QScrollBar:vertical { background: #f1f1f4; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #a1a1ac; min-height: 29px; border-radius: 5px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 """
+
+
+def configure_appearance(app):
+    app.setFont(QFont("Microsoft YaHei UI", 14))
+    app.setStyle("Fusion")
+    app.setStyleSheet(STYLE)
 
 
 class MainWindow(QMainWindow):
@@ -86,31 +209,44 @@ class MainWindow(QMainWindow):
         self.processed = None
         self.reference = None
         self.reference_source = None
+        self.reference_is_synchronized = False
         self.noise = None
+        self.noise_name = ""
+        self.original_title = ""
         self.echo_metadata = None
         self.task = None
+        self._playing = False
+        self._preview_started = 0.0
+        self._preview_offset = 0
+        self._preview_length = 0
+        self._preview_finished = False
+        self._follow_preview = False
         self._closing = False
         self._task_done = None
-        self._record_started = 0
         self._device_error = None
         self.setWindowTitle("数字音效实验室 · DSP Studio")
-        self.resize(1200, 950)
-        self.setMinimumSize(1000, 760)
+        available = self.screen().availableGeometry().size()
+        self.resize(min(1240, available.width() - 24), min(800, available.height() - 48))
+        self.setMinimumSize(760, 560)
         icon = QPixmap(64,64)
-        icon.fill(QColor("#0b1322"))
+        icon.fill(QColor("#223f9e"))
         painter = QPainter(icon)
-        painter.setPen(QColor("#5eead4"))
-        painter.setFont(QFont("Segoe UI",30,QFont.Bold))
-        painter.drawText(icon.rect(),Qt.AlignCenter,"∿")
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#ffffff"), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        wave = QPainterPath()
+        wave.moveTo(11, 32)
+        wave.cubicTo(18, 12, 25, 12, 32, 32)
+        wave.cubicTo(39, 52, 46, 52, 53, 32)
+        painter.drawPath(wave)
         painter.end()
         self.setWindowIcon(QIcon(icon))
         self._build()
-        self.refresh_devices()
+        self.update_device_summary()
         self.refresh_members()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(100)
-        self.log("准备就绪。先录制真实语音，或导入本地音频；录音不会自动上传。")
+        self.log("准备就绪，可以开始录音或导入音频。")
         self.sync_controls()
 
     def button(self, text, slot, primary=False, name=None):
@@ -122,280 +258,623 @@ class MainWindow(QMainWindow):
 
     def hint(self, text):
         label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.PlainText)
         label.setWordWrap(True)
-        label.setObjectName("tagline")
+        label.setObjectName("hint")
+        return label
+
+    @staticmethod
+    def tab_bar(labels, name="choiceTabs"):
+        tabs = QTabBar()
+        tabs.setObjectName(name)
+        tabs.setExpanding(False)
+        tabs.setDrawBase(False)
+        tabs.setUsesScrollButtons(False)
+        tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        for label in labels:
+            tabs.addTab(label)
+        return tabs
+
+    @staticmethod
+    def segmented(tabs):
+        dark = tabs.objectName() in ("displayTabs", "compareTabs")
+        rail = MainWindow.frame("monitorSegments" if dark else "segments")
+        if dark:
+            rail.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        layout = QHBoxLayout(rail)
+        layout.setContentsMargins(3, 3, 3, 3)
+        layout.addWidget(tabs)
+        return rail
+
+    @staticmethod
+    def frame(name):
+        frame = QFrame()
+        frame.setObjectName(name)
+        return frame
+
+    @staticmethod
+    def section_label(text):
+        label = QLabel(text)
+        label.setObjectName("sectionLabel")
         return label
 
     def _build(self):
         central = QWidget()
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(22,16,22,12)
+        outer.setContentsMargins(20, 14, 20, 9)
         outer.setSpacing(10)
-        header = QHBoxLayout()
-        brand = QLabel("数字音效实验室")
-        brand.setObjectName("brand")
-        header.addWidget(brand)
-        subtitle = QLabel("DSP STUDIO  /  语音处理与声纹识别")
-        subtitle.setObjectName("tagline")
-        header.addWidget(subtitle)
-        header.addStretch()
-        header.addWidget(self.button("使用指南",self.show_help))
-        outer.addLayout(header)
 
-        devices = QHBoxLayout()
-        self.input_device, self.output_device = QComboBox(), QComboBox()
-        self.input_device.setMinimumWidth(190)
-        self.output_device.setMinimumWidth(190)
-        devices.addWidget(QLabel("麦克风"))
-        devices.addWidget(self.input_device,1)
-        devices.addWidget(QLabel("播放设备"))
-        devices.addWidget(self.output_device,1)
-        self.refresh_button = self.button("刷新设备",self.refresh_devices)
-        devices.addWidget(self.refresh_button)
-        self.volume = QSpinBox()
-        self.volume.setRange(0,100)
-        self.volume.setValue(75)
-        self.volume.setSuffix(" %")
-        devices.addWidget(QLabel("播放音量"))
-        devices.addWidget(self.volume)
-        outer.addLayout(devices)
+        self.header_bar = QWidget()
+        self.header_bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.header = QGridLayout(self.header_bar)
+        self.header.setContentsMargins(0, 0, 0, 0)
+        self.header.setHorizontalSpacing(12)
+        self.header.setVerticalSpacing(7)
+        self.header.setColumnStretch(1, 1)
+        self.brand = QLabel("数字音效实验室")
+        self.brand.setObjectName("brand")
+        self.header.addWidget(self.brand, 0, 0)
+        self.mode_tabs = self.tab_bar(("语音增强", "回声处理", "成员识别", "附加音效"), "modeTabs")
+        self.mode_rail = self.segmented(self.mode_tabs)
+        self._compact_header = None
 
-        controls = QHBoxLayout()
-        self.record_button = self.button("开始录音",self.start_recording,name="record")
-        self.stop_record_button = self.button("结束录音",self.stop_recording)
-        self.import_button = self.button("导入音频",self.import_audio)
-        self.play_original_button = self.button("播放原音",lambda:self.play(False))
-        self.play_result_button = self.button("播放结果",lambda:self.play(True))
-        self.stop_play_button = self.button("停止播放",self.stop_playback)
-        self.export_button = self.button("导出结果",self.export_audio)
-        self.export_original_button = self.button("保存原音",lambda:self.export_audio(original=True))
-        for b in (self.record_button,self.stop_record_button,self.import_button,self.play_original_button,
-                  self.play_result_button,self.stop_play_button,self.export_original_button,self.export_button):
-            controls.addWidget(b)
-        outer.addLayout(controls)
-        meter_row = QHBoxLayout()
-        self.state_label = QLabel("等待输入")
+        self.build_device_dialog()
+        self.header_actions = QWidget()
+        header_actions = QHBoxLayout(self.header_actions)
+        header_actions.setContentsMargins(0, 0, 0, 0)
+        header_actions.setSpacing(7)
+        self.device_button = self.button("音频设备", self.show_devices)
+        header_actions.addWidget(self.device_button)
+        header_actions.addWidget(self.button("指南", self.show_help))
+        self.header.addWidget(self.header_actions, 0, 2)
+        outer.addWidget(self.header_bar)
+
+        capture = self.frame("toolbar")
+        capture_layout = QHBoxLayout(capture)
+        capture_layout.setContentsMargins(10, 7, 10, 7)
+        capture_layout.setSpacing(8)
+        self.record_button = self.button("开始录音", self.start_recording, name="record")
+        self.stop_record_button = self.button("结束录音", self.stop_recording, name="recording")
+        self.record_controls = QStackedWidget()
+        self.record_controls.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.record_controls.addWidget(self.record_button)
+        self.record_controls.addWidget(self.stop_record_button)
+        capture_layout.addWidget(self.record_controls)
+        self.import_button = self.button("导入音频", self.import_audio)
+        capture_layout.addWidget(self.import_button)
+        self.state_label = QLabel("尚未载入音频")
+        self.state_label.setObjectName("metadata")
+        self.state_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.state_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        capture_layout.addWidget(self.state_label, 1)
         self.level_meter = QProgressBar()
-        self.level_meter.setRange(0,100)
+        self.level_meter.setObjectName("inputMeter")
+        self.level_meter.setRange(0, 100)
         self.level_meter.setTextVisible(False)
-        self.level_meter.setMaximumWidth(180)
-        self.mode_label = QLabel("16 kHz · 单声道 · 本地处理")
-        self.mode_label.setObjectName("tagline")
-        meter_row.addWidget(self.state_label,1)
-        meter_row.addWidget(self.mode_label)
-        meter_row.addWidget(QLabel("输入电平"))
-        meter_row.addWidget(self.level_meter)
-        outer.addLayout(meter_row)
+        self.level_meter.setFixedSize(88, 11)
+        self.level_meter.setAccessibleName("麦克风输入电平")
+        self.level_meter.hide()
+        capture_layout.addWidget(self.level_meter)
 
-        splitter = QSplitter(Qt.Vertical)
-        plot_area = QWidget()
-        pv = QVBoxLayout(plot_area)
-        pv.setContentsMargins(0,0,0,0)
-        plot_header = QHBoxLayout()
+        self.export_button = QToolButton()
+        self.export_button.setObjectName("exportMenu")
+        self.export_button.setText("保存与导出")
+        self.export_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        export_menu = QMenu(self.export_button)
+        self.export_original_action = export_menu.addAction("保存原音 WAV", lambda: self.export_audio(original=True))
+        self.export_result_action = export_menu.addAction("导出结果 WAV", self.export_audio)
+        self.export_button.setMenu(export_menu)
+        capture_layout.addWidget(self.export_button)
+        outer.addWidget(capture)
+
+        self.workspace = QHBoxLayout()
+        self.workspace.setSpacing(12)
+        self.workspace.addWidget(self.build_monitor(), 1)
+
+        self.controls = self.frame("controls")
+        self.controls.setFixedWidth(359)
+        panel = QVBoxLayout(self.controls)
+        panel.setContentsMargins(13, 10, 13, 11)
+        panel.setSpacing(8)
+        self.mode_title = QLabel("语音增强")
+        self.mode_title.setObjectName("sectionTitle")
+        panel.addWidget(self.mode_title)
+        self.source_row = QWidget()
+        input_row = QHBoxLayout(self.source_row)
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.addWidget(self.section_label("处理输入"))
         self.source_combo = QComboBox()
-        self.source_combo.setMinimumWidth(225)
-        self.source_combo.addItems(["以原始语音为处理输入", "以上次结果为处理输入"])
-        plot_header.addWidget(self.source_combo)
-        plot_header.addStretch()
-        self.spectrum_check = QCheckBox("显示频谱")
-        self.spectrum_check.toggled.connect(self.toggle_spectrum)
-        plot_header.addWidget(self.spectrum_check)
-        pv.addLayout(plot_header)
-        plots = QHBoxLayout()
-        self.original_plot = SignalPlot("原始语音")
-        self.result_plot = SignalPlot("处理结果", "#9daafa")
-        plots.addWidget(self.original_plot)
-        plots.addWidget(self.result_plot)
-        pv.addLayout(plots)
-        splitter.addWidget(plot_area)
-
-        self.tabs = QTabWidget()
-        for page,title in ((self.build_enhancement(),"01  语音增强"),(self.build_echo(),"02  回声实验"),
-                           (self.build_speaker(),"03  成员识别"),(self.build_effects(),"04  创意音效")):
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(page)
-            self.tabs.addTab(scroll,title)
-        splitter.addWidget(self.tabs)
-        splitter.setSizes([225,360])
-        outer.addWidget(splitter,1)
+        self.source_combo.setAccessibleName("处理输入")
+        self.source_combo.addItems(("原始录音", "接着处理上次结果"))
+        input_row.addWidget(self.source_combo, 1)
+        panel.addWidget(self.source_row)
+        self.tabs = QStackedWidget()
+        for page in (self.build_enhancement(), self.build_echo(), self.build_speaker(), self.build_effects()):
+            self.tabs.addWidget(page)
+        panel.addWidget(self.tabs, 1)
+        self.mode_tabs.currentChanged.connect(self.tabs.setCurrentIndex)
+        self.tabs.currentChanged.connect(self.mode_tabs.setCurrentIndex)
+        self.tabs.currentChanged.connect(self.sync_controls)
+        self.workspace.addWidget(self.controls)
+        outer.addLayout(self.workspace, 1)
 
         footer = QHBoxLayout()
+        self.operation = QLabel()
+        self.operation.setObjectName("operation")
+        self.operation.setTextFormat(Qt.TextFormat.PlainText)
+        self.operation.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.operation.setWordWrap(True)
+        self.operation.setMaximumHeight(48)
+        footer.addWidget(self.operation, 1)
         self.progress = QProgressBar()
-        self.progress.setRange(0,100)
-        self.progress.setValue(0)
-        self.progress.setMaximumWidth(180)
+        self.progress.setFixedWidth(100)
+        self.progress.setTextVisible(False)
+        self.progress.setAccessibleName("处理进度")
+        self.progress.hide()
+        footer.addWidget(self.progress)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(120)
-        self.log_view.setMaximumHeight(85)
-        footer.addWidget(self.log_view,1)
-        footer.addWidget(self.progress)
+        self.log_view.setFixedHeight(83)
+        footer.addWidget(self.disclosure("日志", self.log_view))
         outer.addLayout(footer)
+        outer.addWidget(self.log_view)
         self.setCentralWidget(central)
-        self.statusBar().showMessage(f"DSP Studio {__version__}  |  最长 300 秒 / 段  |  录音后处理")
+        self.source_combo.currentIndexChanged.connect(self.sync_controls)
+        self.update_layout()
 
-    def build_enhancement(self):
+    def update_layout(self):
+        header_width = sum(widget.sizeHint().width() for widget in (self.brand, self.mode_rail, self.header_actions))
+        compact_header = self.width() < header_width + 40 + 2 * self.header.horizontalSpacing()
+        if compact_header != self._compact_header:
+            self._compact_header = compact_header
+            self.header.removeWidget(self.mode_rail)
+            if compact_header:
+                self.header.addWidget(self.mode_rail, 1, 0, 1, 3, Qt.AlignmentFlag.AlignHCenter)
+            else:
+                self.header.addWidget(self.mode_rail, 0, 1, Qt.AlignmentFlag.AlignHCenter)
+            self.header_bar.setFixedHeight(self.header.sizeHint().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "workspace"):
+            self.update_layout()
+
+    def build_device_dialog(self):
+        self.device_dialog = QDialog(self)
+        self.device_dialog.setWindowTitle("音频设备")
+        self.device_dialog.setMinimumWidth(480)
+        layout = QVBoxLayout(self.device_dialog)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(10)
+        form = QFormLayout()
+        self.input_device, self.output_device = QComboBox(), QComboBox()
+        self.input_device.addItem("系统默认输入", None)
+        self.output_device.addItem("系统默认输出", None)
+        for box in (self.input_device, self.output_device):
+            box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            box.setMinimumContentsLength(28)
+            box.currentIndexChanged.connect(self.update_device_summary)
+        form.addRow("麦克风", self.input_device)
+        form.addRow("播放设备", self.output_device)
+        self.volume = QSpinBox()
+        self.volume.setRange(0, 100)
+        self.volume.setValue(75)
+        self.volume.setSuffix(" %")
+        self.volume.setToolTip("调整试听和参考播放的音量")
+        form.addRow("播放音量", self.volume)
+        layout.addLayout(form)
+        self.device_info = self.hint("")
+        layout.addWidget(self.device_info)
+        actions = QHBoxLayout()
+        self.refresh_button = self.button("刷新设备", self.refresh_devices)
+        actions.addWidget(self.refresh_button)
+        actions.addStretch()
+        actions.addWidget(self.button("完成", self.device_dialog.accept, True))
+        layout.addLayout(actions)
+
+    def build_monitor(self):
+        monitor = QWidget()
+        layout = QVBoxLayout(monitor)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+        panel = self.frame("monitor")
+        signals = QVBoxLayout(panel)
+        signals.setContentsMargins(9, 7, 9, 6)
+        signals.setSpacing(6)
+        header = QHBoxLayout()
+        header.setSpacing(6)
+        self.display_tabs = self.tab_bar(("波形", "频谱"), "displayTabs")
+        self.display_tabs.setAccessibleName("信号显示")
+        header.addWidget(self.segmented(self.display_tabs))
+        header.addStretch(1)
+        self.monitor_meta = QLabel("16 kHz · 双轨同步")
+        self.monitor_meta.setObjectName("monitorMeta")
+        self.monitor_meta.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self.monitor_meta)
+        header.addStretch(1)
+        self.compare_tabs = self.tab_bar(("上下", "叠加"), "compareTabs")
+        self.compare_tabs.setAccessibleName("原音与结果的对比方式")
+        self.compare_tabs.setTabToolTip(0, "上下两轨共用坐标和播放位置")
+        self.compare_tabs.setTabToolTip(1, "两条信号共用一块画布，重合处混色")
+        header.addWidget(self.segmented(self.compare_tabs))
+        self.full_view_button = QToolButton()
+        self.full_view_button.setObjectName("plotFocus")
+        self.full_view_button.setText("展开")
+        self.full_view_button.setToolTip("展开图表，收起功能导航和参数面板")
+        self.full_view_button.setCheckable(True)
+        self.full_view_button.toggled.connect(self.toggle_full_view)
+        header.addWidget(self.full_view_button)
+        signals.addLayout(header)
+        self.timeline = SignalTimeline()
+        self.timeline.positionChanged.connect(self.display_position)
+        self.timeline.viewChanged.connect(self.pause_preview_following)
+        self.timeline.seekRequested.connect(self.seek_audition)
+        self.timeline.playToggleRequested.connect(self.toggle_playback)
+        self.display_tabs.currentChanged.connect(lambda index: self.toggle_spectrum(index == 1))
+        self.compare_tabs.currentChanged.connect(lambda index: self.timeline.set_overlay(index == 1))
+        signals.addWidget(self.timeline, 1)
+        layout.addWidget(panel, 1)
+
+        footer = self.frame("toolbar")
+        footer.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.timeline_tools = QBoxLayout(QBoxLayout.Direction.TopToBottom, footer)
+        self.timeline_tools.setContentsMargins(9, 5, 9, 5)
+        self.timeline_tools.setSpacing(6)
+
+        self.zoom_controls = QWidget()
+        zoom_layout = QHBoxLayout(self.zoom_controls)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(3)
+        self.x_axis_label = self.add_zoom_buttons(zoom_layout, "时间", "x")
+        zoom_layout.addSpacing(4)
+        self.y_axis_label = self.add_zoom_buttons(zoom_layout, "幅度", "y")
+        self.fit_db_button = QToolButton()
+        self.fit_db_button.setObjectName("spectrumFit")
+        self.fit_db_button.setText("自动")
+        self.fit_db_button.setAccessibleName("自动适配频谱纵轴")
+        self.fit_db_button.setToolTip("用可见频段内两条频谱的范围，自动适配共同的 dB 纵轴。")
+        self.fit_db_button.clicked.connect(self.timeline.fit_spectrum_y)
+        self.fit_db_button.hide()
+        zoom_layout.insertWidget(zoom_layout.indexOf(self.y_axis_label), self.fit_db_button)
+        zoom_layout.addSpacing(4)
+        fit = QToolButton()
+        fit.setObjectName("axisTool")
+        fit.setText("全览")
+        fit.setToolTip("同时复位横轴和纵轴，显示全段")
+        fit.clicked.connect(lambda: self.timeline.reset_view())
+        zoom_layout.addWidget(fit)
+        self.link_zoom = QToolButton()
+        self.link_zoom.setObjectName("zoomLink")
+        self.link_zoom.setText("联动")
+        self.link_zoom.setAccessibleName("联动缩放")
+        self.link_zoom.setToolTip("联动缩放。开启后调任一轴时，两轴一起缩放。")
+        self.link_zoom.setCheckable(True)
+        self.link_zoom.toggled.connect(self.timeline.set_zoom_linked)
+        zoom_layout.addWidget(self.link_zoom)
+        zoom_layout.addStretch(1)
+        self.timeline_tools.addWidget(self.zoom_controls)
+
+        self.audition_controls = QWidget()
+        audition_layout = QHBoxLayout(self.audition_controls)
+        audition_layout.setContentsMargins(0, 0, 0, 0)
+        audition_layout.setSpacing(5)
+        self.audition_tabs = self.tab_bar(("原音", "结果"), "auditionTabs")
+        self.audition_tabs.setAccessibleName("试听对象")
+        self.audition_tabs.currentChanged.connect(self.audition_changed)
+        audition_layout.addWidget(self.segmented(self.audition_tabs))
+        self.play_button = self.button("播放", self.toggle_playback, name="timelinePlay")
+        self.play_button.setMinimumWidth(66)
+        audition_layout.addWidget(self.play_button)
+        self.audition_position = QLineEdit("00:00.000")
+        self.audition_position.setObjectName("timelinePosition")
+        self.audition_position.setAccessibleName("播放位置，可输入时间跳转")
+        self.audition_position.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.audition_position.setMaxLength(14)
+        self.audition_position.setFixedWidth(99)
+        self.audition_position.editingFinished.connect(self.commit_position)
+        audition_layout.addWidget(self.audition_position)
+        self.timeline_tools.addWidget(self.audition_controls, 0, Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(footer)
+        self.timeline.resized.connect(self.update_timeline_tools)
+        return monitor
+
+    def add_zoom_buttons(self, layout, text, axis):
+        title = QLabel(text)
+        title.setObjectName("axisLabel")
+        layout.addWidget(title)
+        axis_name = "横轴" if axis == "x" else "纵轴"
+        for symbol, change, description in (("−", 1 / 1.4, "缩小"), ("+", 1.4, "放大")):
+            button = QToolButton()
+            button.setObjectName("axisTool")
+            button.setText(symbol)
+            button.setAccessibleName(axis_name + description)
+            button.setToolTip(axis_name + description)
+            button.setFixedWidth(27)
+            button.clicked.connect(lambda checked=False, factor=change: self.timeline.zoom(axis, factor))
+            layout.addWidget(button)
+        return title
+
+    def update_timeline_tools(self, width):
+        required = (self.audition_controls.sizeHint().width() + self.zoom_controls.sizeHint().width()
+                    + self.timeline_tools.spacing())
+        direction = QBoxLayout.Direction.LeftToRight if width >= required else QBoxLayout.Direction.TopToBottom
+        if self.timeline_tools.direction() != direction:
+            self.timeline_tools.setDirection(direction)
+        self.monitor_meta.setVisible(width >= 475)
+
+    def toggle_full_view(self, expanded):
+        self.controls.setVisible(not expanded)
+        self.header_bar.setVisible(not expanded)
+        self.full_view_button.setText("还原" if expanded else "展开")
+        self.full_view_button.setToolTip("恢复功能导航和参数面板" if expanded else "展开图表，收起功能导航和参数面板")
+
+    @staticmethod
+    def disclosure(title, widget):
+        button = QToolButton()
+        button.setText(title)
+        button.setObjectName("textButton")
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setArrowType(Qt.ArrowType.RightArrow)
+        button.setCheckable(True)
+        widget.hide()
+        button.toggled.connect(widget.setVisible)
+        button.toggled.connect(lambda opened: button.setArrowType(
+            Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow))
+        return button
+
+    @staticmethod
+    def mode_page():
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.addWidget(self.hint("维纳谱增益降噪：录音开头先安静片刻，再说话。也可以单独录制纯环境噪声作为噪声样本。"))
-        group = QGroupBox("降噪参数")
-        form = QGridLayout(group)
-        self.noise_strength = QDoubleSpinBox()
-        self.noise_strength.setRange(0,3)
-        self.noise_strength.setSingleStep(0.1)
-        self.noise_strength.setValue(1.2)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        return page, layout
+
+    @staticmethod
+    def scroll_form(layout):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(48)
+        body = QWidget()
+        body.setObjectName("controlForm")
+        container = QVBoxLayout(body)
+        container.setContentsMargins(1, 3, 5, 4)
+        form = QVBoxLayout()
+        form.setSpacing(7)
+        container.addLayout(form)
+        container.addStretch()
+        scroll.setWidget(body)
+        layout.addWidget(scroll, 1)
+        return form
+
+    def build_enhancement(self):
+        page, layout = self.mode_page()
+        form = self.scroll_form(layout)
+        form.addWidget(self.hint("用纯噪声估计背景，减弱风扇和空调等稳定噪声。"))
+        form.addWidget(self.section_label("噪声来源"))
+        self.noise_mode = self.tab_bar(("录音开头", "独立噪声"))
+        form.addWidget(self.segmented(self.noise_mode), 0, Qt.AlignmentFlag.AlignLeft)
+        self.noise_options = QStackedWidget()
+
+        prefix = QWidget()
+        prefix_layout = QFormLayout(prefix)
+        prefix_layout.setContentsMargins(0, 0, 0, 0)
         self.noise_duration = QDoubleSpinBox()
-        self.noise_duration.setRange(0.1,3)
+        self.noise_duration.setRange(0.1, 3)
         self.noise_duration.setSingleStep(0.1)
         self.noise_duration.setValue(0.4)
         self.noise_duration.setSuffix(" 秒")
-        form.addWidget(QLabel("降噪强度"),0,0)
-        form.addWidget(self.noise_strength,0,1)
-        form.addWidget(QLabel("开头纯噪声时长"),0,2)
-        form.addWidget(self.noise_duration,0,3)
-        self.noise_button = self.button("导入纯噪声样本",self.import_noise)
-        self.clear_noise_button = self.button("改用语音开头估计",self.clear_noise)
-        form.addWidget(self.noise_button,1,0,1,2)
-        form.addWidget(self.clear_noise_button,1,2,1,2)
-        self.noise_label = self.hint("噪声来源：输入音频开头 0.4 秒（请确保这段没有说话）")
+        self.noise_duration.setMaximumWidth(132)
+        prefix_layout.addRow("开头纯噪声时长", self.noise_duration)
+        self.noise_options.addWidget(prefix)
+
+        profile = QWidget()
+        profile_layout = QHBoxLayout(profile)
+        profile_layout.setContentsMargins(0, 0, 0, 0)
+        self.noise_button = self.button("导入纯噪声样本", self.import_noise)
+        profile_layout.addWidget(self.noise_button)
+        profile_layout.addStretch()
+        self.noise_options.addWidget(profile)
+        form.addWidget(self.noise_options)
+        self.noise_label = self.hint("录音开始时，前 0.4 秒保持安静。")
+        form.addWidget(self.noise_label)
+
+        parameters = QFormLayout()
+        self.noise_strength = QDoubleSpinBox()
+        self.noise_strength.setRange(0, 3)
+        self.noise_strength.setSingleStep(0.1)
+        self.noise_strength.setValue(1.2)
+        self.noise_strength.setMaximumWidth(132)
+        self.noise_strength.setToolTip("建议 0.8～1.5，强度过高可能损伤部分语音")
+        parameters.addRow("降噪强度", self.noise_strength)
+        form.addLayout(parameters)
+        self.noise_mode.currentChanged.connect(self.noise_options.setCurrentIndex)
+        self.noise_mode.currentChanged.connect(self.update_noise_label)
+        self.noise_mode.currentChanged.connect(self.sync_controls)
         self.noise_duration.valueChanged.connect(self.update_noise_label)
-        form.addWidget(self.noise_label,2,0,1,4)
-        layout.addWidget(group)
-        self.enhance_button = self.button("执行语音增强",self.apply_enhance,True)
+        self.enhance_button = self.button("执行语音增强", self.apply_enhance, True)
         layout.addWidget(self.enhance_button)
-        layout.addWidget(self.hint("建议强度 0.8～1.5。过强可能造成失真；讲话声、突发敲击和混响通常难以完全去除。"))
-        layout.addStretch()
         return page
 
     def build_echo(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setSpacing(7)
-        group = QGroupBox("可控回声 · 产生与还原")
-        grid = QGridLayout(group)
+        page, layout = self.mode_page()
+        self.echo_mode = self.tab_bar(("回声音效", "声学回声消除"))
+        layout.addWidget(self.segmented(self.echo_mode), 0, Qt.AlignmentFlag.AlignLeft)
+        modes = QStackedWidget()
+        effect_page = QWidget()
+        effect_layout = QVBoxLayout(effect_page)
+        effect_layout.setContentsMargins(0, 0, 0, 0)
+        effect_layout.setSpacing(6)
+        form = self.scroll_form(effect_layout)
+        form.addWidget(self.hint("把延时、衰减后的语音叠加到原音，随后可以按本次参数还原。"))
+        params = QFormLayout()
         self.echo_delay = QSpinBox()
-        self.echo_delay.setRange(20,1200)
+        self.echo_delay.setRange(20, 1200)
         self.echo_delay.setValue(240)
         self.echo_delay.setSuffix(" ms")
+        self.echo_delay.setMaximumWidth(132)
+        params.addRow("延时", self.echo_delay)
         self.echo_decay = QDoubleSpinBox()
-        self.echo_decay.setRange(0,0.9)
+        self.echo_decay.setRange(0, 0.9)
         self.echo_decay.setSingleStep(0.05)
         self.echo_decay.setValue(0.45)
+        self.echo_decay.setMaximumWidth(132)
+        params.addRow("衰减", self.echo_decay)
         self.echo_repeats = QSpinBox()
-        self.echo_repeats.setRange(1,8)
+        self.echo_repeats.setRange(1, 8)
         self.echo_repeats.setValue(3)
-        grid.addWidget(QLabel("延时"),0,0)
-        grid.addWidget(self.echo_delay,0,1)
-        grid.addWidget(QLabel("衰减"),0,2)
-        grid.addWidget(self.echo_decay,0,3)
-        grid.addWidget(QLabel("重复次数"),0,4)
-        grid.addWidget(self.echo_repeats,0,5)
-        self.echo_button = self.button("产生回声",self.apply_echo,True)
-        self.undo_echo_button = self.button("还原本次生成的回声",self.apply_undo_echo)
-        grid.addWidget(self.echo_button,1,0,1,3)
-        grid.addWidget(self.undo_echo_button,1,3,1,3)
-        layout.addWidget(group)
+        self.echo_repeats.setMaximumWidth(132)
+        params.addRow("重复次数", self.echo_repeats)
+        form.addLayout(params)
+        actions = QHBoxLayout()
+        self.echo_button = self.button("产生回声", self.apply_echo, True)
+        self.undo_echo_button = self.button("还原本次回声", self.apply_undo_echo)
+        actions.addWidget(self.echo_button, 1)
+        actions.addWidget(self.undo_echo_button)
+        effect_layout.addLayout(actions)
+        modes.addWidget(effect_page)
 
-        acoustic = QGroupBox("参考信号回声消除 · NLMS 自适应滤波")
-        ag = QGridLayout(acoustic)
-        self.reference_button = self.button("导入远端参考音频",self.import_reference)
-        self.acoustic_button = self.button("播放参考并采集麦克风",self.start_acoustic)
-        self.reference_label = self.hint("参考：尚未导入。待处理输入应为含回声的麦克风录音。")
-        ag.addWidget(self.reference_button,0,0,1,2)
-        ag.addWidget(self.acoustic_button,0,2,1,2)
-        ag.addWidget(self.reference_label,1,0,1,4)
-        self.auto_delay = QCheckBox("自动估计延时")
-        self.auto_delay.setChecked(True)
-        self.aec_delay = QDoubleSpinBox()
-        self.aec_delay.setRange(0,2000)
-        self.aec_delay.setSuffix(" ms")
-        self.aec_delay.setEnabled(False)
-        self.auto_delay.toggled.connect(lambda value:self.aec_delay.setEnabled(not value))
-        self.aec_taps = QComboBox()
-        for n in (128,256,512,1024,2048):
-            self.aec_taps.addItem(f"{n} taps ({n/SR*1000:g} ms)",n)
-        self.aec_taps.setCurrentIndex(2)
+        acoustic = QWidget()
+        acoustic_layout = QVBoxLayout(acoustic)
+        acoustic_layout.setContentsMargins(0, 0, 0, 0)
+        acoustic_layout.setSpacing(6)
+        self.reference_button = self.button("导入远端参考", self.import_reference)
+        acoustic_layout.addWidget(self.reference_button)
+        form = self.scroll_form(acoustic_layout)
+        self.reference_label = self.hint("导入扬声器的参考音频，再同步录制或使用对应的麦克风录音。")
+        form.addWidget(self.reference_label)
+
         self.calibration = QDoubleSpinBox()
-        self.calibration.setRange(0.5,15)
+        self.calibration.setRange(0.5, 15)
         self.calibration.setValue(2.0)
         self.calibration.setSuffix(" 秒")
-        ag.addWidget(self.auto_delay,2,0)
-        ag.addWidget(self.aec_delay,2,1)
-        ag.addWidget(QLabel("滤波器长度"),2,2)
-        ag.addWidget(self.aec_taps,2,3)
-        ag.addWidget(QLabel("仅远端发声的校准时长"),3,0,1,2)
-        ag.addWidget(self.calibration,3,2)
-        self.aec_button = self.button("执行 NLMS 回声消除",self.apply_aec,True)
-        ag.addWidget(self.aec_button,3,3)
-        layout.addWidget(acoustic)
-        layout.addWidget(self.hint("声学实验请用扬声器：前 2 秒本地保持安静，之后再说话。校准后冻结滤波器以保留本地语音；移动设备需重新校准。自动对齐范围 0～1200 ms。"))
-        layout.addStretch()
+        self.calibration.setMaximumWidth(132)
+        self.auto_delay = QCheckBox("自动估计参考延时")
+        self.auto_delay.setChecked(True)
+        self.aec_delay = QDoubleSpinBox()
+        self.aec_delay.setRange(0, 2000)
+        self.aec_delay.setSuffix(" ms")
+        self.aec_delay.setMaximumWidth(132)
+        self.aec_delay.setEnabled(False)
+        self.auto_delay.toggled.connect(lambda auto: self.aec_delay.setEnabled(not auto))
+        self.aec_taps = QComboBox()
+        for taps in (128, 256, 512, 1024, 2048):
+            self.aec_taps.addItem(f"{taps} 抽头 · {taps / SR * 1000:g} ms", taps)
+        self.aec_taps.setCurrentIndex(2)
+        self.aec_taps.setMaximumWidth(212)
+        self.calibration_hint = self.hint("")
+        self.calibration.valueChanged.connect(self.update_calibration_hint)
+        self.update_calibration_hint()
+        form.addWidget(self.calibration_hint)
+        params = QFormLayout()
+        params.addRow("校准时长", self.calibration)
+        params.addRow("滤波器长度", self.aec_taps)
+        params.addRow(self.auto_delay)
+        params.addRow("手动延时", self.aec_delay)
+        form.addLayout(params)
+        self.acoustic_button = self.button("播放并录音", self.start_acoustic)
+        self.acoustic_button.setAccessibleName("播放远端参考并录音")
+        self.acoustic_button.setToolTip("通过扬声器播放参考，同时采集麦克风")
+        self.aec_button = self.button("执行 NLMS 消除", self.apply_aec, True)
+        actions = QHBoxLayout()
+        actions.addWidget(self.acoustic_button)
+        actions.addWidget(self.aec_button, 1)
+        acoustic_layout.addLayout(actions)
+        modes.addWidget(acoustic)
+        self.echo_mode.currentChanged.connect(modes.setCurrentIndex)
+        layout.addWidget(modes, 1)
         return page
 
+    def update_calibration_hint(self):
+        self.calibration_hint.setText(f"使用扬声器，前 {self.calibration.value():g} 秒保持安静。")
+
     def build_speaker(self):
-        page = QWidget()
-        layout = QHBoxLayout(page)
-        left = QVBoxLayout()
-        left.addWidget(QLabel("已注册项目成员"))
+        page, layout = self.mode_page()
+        form = self.scroll_form(layout)
+        self.member_title = self.section_label("")
+        roster = QHBoxLayout()
+        roster.addWidget(self.member_title)
+        roster.addStretch()
+        self.delete_member_button = self.button("删除所选成员", self.delete_member)
+        roster.addWidget(self.delete_member_button)
+        form.addLayout(roster)
+        self.speaker_next = self.hint("")
+        form.addWidget(self.speaker_next)
         self.member_list = QListWidget()
-        self.member_list.setMinimumWidth(235)
-        left.addWidget(self.member_list,1)
-        self.delete_member_button = self.button("删除选中成员及声纹",self.delete_member)
-        left.addWidget(self.delete_member_button)
-        layout.addLayout(left,1)
-        right = QVBoxLayout()
-        right.addWidget(self.hint("使用上方“开始录音”采集成员语音。每人建议录制至少 3 段，每段 5～15 秒，读不同内容；同名注册会追加样本。注册与识别均使用左侧原始语音。"))
-        row = QHBoxLayout()
+        self.member_list.setAccessibleName("已注册成员与样本段数")
+        self.member_list.setFixedHeight(102)
+        self.member_list.itemSelectionChanged.connect(self.sync_controls)
+        form.addWidget(self.member_list)
+
+        register = QHBoxLayout()
         self.member_name = QLineEdit()
-        self.member_name.setPlaceholderText("输入项目成员姓名")
+        self.member_name.setPlaceholderText("成员姓名")
         self.member_name.setMaxLength(30)
-        row.addWidget(self.member_name,1)
-        self.enroll_button = self.button("注册当前原音",self.enroll_member,True)
-        row.addWidget(self.enroll_button)
-        right.addLayout(row)
-        self.reject_unknown = QCheckBox("启用实验性未知人拒识（阈值需用本组独立录音验证）")
-        right.addWidget(self.reject_unknown)
-        self.identify_button = self.button("识别当前原音中的说话人",self.identify,True)
-        right.addWidget(self.identify_button)
-        self.speaker_result = QLabel("等待注册与识别")
-        self.speaker_result.setStyleSheet("font-size: 18pt; color: #5eead4; padding: 10px 0;")
-        self.speaker_result.setWordWrap(True)
-        right.addWidget(self.speaker_result)
+        self.member_name.setAccessibleName("成员姓名")
+        self.member_name.textChanged.connect(self.sync_controls)
+        register.addWidget(self.member_name, 1)
+        self.enroll_button = self.button("注册原音", self.enroll_member)
+        register.addWidget(self.enroll_button)
+        layout.addLayout(register)
+
+        details = QWidget()
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 1, 0, 0)
+        self.reject_unknown = QCheckBox("实验性未知人拒识")
+        self.reject_unknown.setToolTip("阈值需要用本组独立录音验证")
+        details_layout.addWidget(self.reject_unknown)
         self.speaker_scores = QPlainTextEdit()
         self.speaker_scores.setReadOnly(True)
-        self.speaker_scores.setMaximumHeight(125)
-        right.addWidget(self.speaker_scores)
-        right.addWidget(self.hint("算法：MFCC + Δ特征 / 对角协方差 GMM。模型分数为平均对数似然，并非准确率或身份概率。默认在本组已注册成员中选择。"))
-        right.addStretch()
-        layout.addLayout(right,3)
+        self.speaker_scores.setFixedHeight(92)
+        self.speaker_scores.setPlaceholderText("识别后显示各成员的平均对数似然")
+        details_layout.addWidget(self.speaker_scores)
+        form.addWidget(self.disclosure("似然分数与拒识选项", details), 0, Qt.AlignmentFlag.AlignLeft)
+        form.addWidget(details)
+        self.speaker_result = QLabel()
+        self.speaker_result.setObjectName("speakerResult")
+        self.speaker_result.setTextFormat(Qt.TextFormat.PlainText)
+        self.speaker_result.setWordWrap(True)
+        self.speaker_result.hide()
+        layout.addWidget(self.speaker_result)
+        self.identify_button = self.button("识别原音中的说话人", self.identify, True)
+        layout.addWidget(self.identify_button)
         return page
 
     def build_effects(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.addWidget(self.hint("附加音效可使用“上次结果”串联。所有操作保留原始语音，导出时保存当前处理结果。"))
-        row = QHBoxLayout()
-        self.effect_combo = QComboBox()
-        self.effect_combo.addItems(["变速 / 变调","机器人音","电话音","音量调整"])
+        page, layout = self.mode_page()
+        form = self.scroll_form(layout)
+        self.effect_names = ("变速 / 变调", "机器人音", "电话音", "音量调整")
+        self.effect_choices = QButtonGroup(self)
+        choices = QGridLayout()
+        choices.setSpacing(6)
+        for index, name in enumerate(self.effect_names):
+            button = QPushButton(name)
+            button.setObjectName("effectChoice")
+            button.setCheckable(True)
+            self.effect_choices.addButton(button, index)
+            choices.addWidget(button, index // 2, index % 2)
+        form.addLayout(choices)
         self.effect_amount = QDoubleSpinBox()
+        self.effect_amount.setMaximumWidth(132)
         self.effect_amount_label = QLabel()
-        row.addWidget(QLabel("音效"))
-        row.addWidget(self.effect_combo,1)
-        row.addWidget(self.effect_amount_label)
-        row.addWidget(self.effect_amount)
-        self.effect_button = self.button("应用音效",self.apply_effect,True)
-        row.addWidget(self.effect_button)
-        layout.addLayout(row)
+        params = QFormLayout()
+        params.addRow(self.effect_amount_label, self.effect_amount)
+        form.addLayout(params)
         self.effect_description = self.hint("")
-        layout.addWidget(self.effect_description)
-        self.effect_combo.currentTextChanged.connect(self.effect_changed)
-        self.effect_changed(self.effect_combo.currentText())
-        layout.addStretch()
+        form.addWidget(self.effect_description)
+        self.effect_choices.idClicked.connect(lambda index: self.effect_changed(self.effect_names[index]))
+        self.effect_choices.button(0).setChecked(True)
+        self.effect_changed(self.effect_names[0])
+        self.effect_button = self.button("应用音效", self.apply_effect, True)
+        layout.addWidget(self.effect_button)
         return page
 
     def effect_changed(self, name):
-        self.effect_amount.setEnabled(True)
+        self.effect_amount.setVisible(name != "电话音")
+        self.effect_amount_label.setVisible(name != "电话音")
         if name == "变速 / 变调":
             self.effect_amount_label.setText("播放倍率")
             self.effect_amount.setRange(0.5,2.0)
@@ -416,20 +895,25 @@ class MainWindow(QMainWindow):
             self.effect_amount.setSingleStep(1)
             self.effect_amount.setSuffix(" dB")
             self.effect_amount.setValue(3)
-            self.effect_description.setText("调节信号增益，必要时统一衰减以避免数字削波；顶部音量仅影响试听。")
+            self.effect_description.setText("调整处理结果的音量。试听音量可在音频设备中单独调节。")
         else:
-            self.effect_amount_label.setText("300～3400 Hz 带通")
-            self.effect_amount.setEnabled(False)
-            self.effect_amount.setSuffix("")
-            self.effect_description.setText("五阶巴特沃斯带通滤波，模拟传统电话的窄带听感。")
+            self.effect_description.setText("保留 300～3400 Hz，模拟传统电话的窄带听感。")
 
-    def log(self,text):
-        self.log_view.appendPlainText(time.strftime("%H:%M:%S")+"  "+text)
+    def log(self, text, *, error=False):
+        self.log_view.appendPlainText(time.strftime("%H:%M:%S") + "  " + text)
         logging.info(text)
+        self.operation.setText(text.splitlines()[0])
+        self.operation.setToolTip(text)
+        self.operation.setProperty("error", error)
+        self.operation.style().unpolish(self.operation)
+        self.operation.style().polish(self.operation)
 
-    def error(self,text):
-        self.log("操作失败："+str(text))
-        QMessageBox.warning(self,"操作未完成",str(text))
+    def error(self, text):
+        self.log("操作失败 · " + str(text), error=True)
+
+    def show_devices(self):
+        self.refresh_devices()
+        self.device_dialog.exec()
 
     def refresh_devices(self):
         old_in, old_out = self.input_device.currentData(), self.output_device.currentData()
@@ -439,8 +923,9 @@ class MainWindow(QMainWindow):
         self.output_device.addItem("系统默认输出",None)
         try:
             devices = self.engine.devices()
+            host_apis = self.engine.host_apis()
             for i,d in enumerate(devices):
-                label = f"{i} · {d['name']}"
+                label = f"{i} · {d['name']} ({host_apis[d['hostapi']]})"
                 if d["max_input_channels"]>0:
                     self.input_device.addItem(label,i)
                 if d["max_output_channels"]>0:
@@ -453,46 +938,82 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._device_error = str(exc)
             logging.exception("Device enumeration failed")
+        self.update_device_summary()
+
+    def update_device_summary(self):
+        if self._device_error:
+            summary = "无法读取设备列表，请刷新或检查系统的麦克风权限。"
+        else:
+            summary = f"麦克风 · {self.input_device.currentText()}\n播放 · {self.output_device.currentText()}"
+        self.device_info.setText(summary)
+        self.device_button.setToolTip(summary)
 
     def sync_controls(self):
         busy = self.task is not None
         recording = self.engine.stream is not None
         idle = not busy and not recording
         has = self.original is not None
+        has_result = self.processed is not None
+        has_input = has_result if self.source_combo.currentIndex() == 1 else has
+        member_count = self.member_list.count()
+        self.record_controls.setCurrentWidget(self.stop_record_button if recording else self.record_button)
         self.record_button.setEnabled(idle)
         self.stop_record_button.setEnabled(recording)
         self.import_button.setEnabled(idle)
+        self.device_button.setEnabled(idle)
         self.input_device.setEnabled(idle)
         self.output_device.setEnabled(idle)
         self.refresh_button.setEnabled(idle)
         self.source_combo.setEnabled(idle)
+        self.source_combo.model().item(1).setEnabled(has_result)
+        self.source_row.setVisible(self.tabs.currentIndex() != 2)
+        self.mode_title.setText(self.mode_tabs.tabText(self.tabs.currentIndex()))
         self.volume.setEnabled(idle)
-        self.play_original_button.setEnabled(idle and has)
-        self.play_result_button.setEnabled(idle and self.processed is not None)
-        self.export_button.setEnabled(idle and self.processed is not None)
-        self.export_original_button.setEnabled(idle and has)
-        for b in (self.enhance_button,self.echo_button,self.effect_button,self.enroll_button):
-            b.setEnabled(idle and has)
+        self.level_meter.setVisible(recording)
+        self.audition_tabs.setEnabled(idle)
+        self.audition_tabs.setTabEnabled(0, has)
+        self.audition_tabs.setTabEnabled(1, has_result)
+        self.fit_db_button.setEnabled(has or has_result)
+        self.update_player()
+        self.export_button.setEnabled(idle and (has or has_result))
+        self.export_original_action.setEnabled(idle and has)
+        self.export_result_action.setEnabled(idle and has_result)
+        self.enhance_button.setEnabled(idle and has_input and (self.noise_mode.currentIndex() == 0 or self.noise is not None))
+        self.echo_button.setEnabled(idle and has_input)
+        self.effect_button.setEnabled(idle and has_input)
+        self.enroll_button.setEnabled(idle and has and bool(self.member_name.text().strip()))
         self.undo_echo_button.setEnabled(idle and self.echo_metadata is not None)
-        self.aec_button.setEnabled(idle and has and self.reference is not None)
-        self.acoustic_button.setEnabled(idle and self.reference is not None)
+        self.aec_button.setEnabled(idle and has_input and self.reference is not None)
+        self.acoustic_button.setEnabled(idle and (self.reference_source is not None or self.reference is not None))
         self.reference_button.setEnabled(idle)
         self.noise_button.setEnabled(idle)
-        self.clear_noise_button.setEnabled(idle)
-        self.identify_button.setEnabled(idle and has and bool(self.store.entries))
-        self.delete_member_button.setEnabled(idle and bool(self.store.entries))
+        self.identify_button.setEnabled(idle and has and member_count >= 2)
+        self.delete_member_button.setEnabled(idle and self.member_list.currentItem() is not None)
 
-    def set_original(self,audio,title="原始语音"):
+    def set_original(self, audio, title="原始语音", *, synchronized_reference=None):
+        self.stop_playback(announce=False)
+        self._preview_finished = False
+        if synchronized_reference is not None:
+            self.reference = synchronized_reference.copy()
+            self.reference_is_synchronized = True
+            self.reference_label.setText("已配对本次同步录音和播放参考，可以执行消除。")
+        elif self.reference_is_synchronized:
+            self.reference = None
+            self.reference_is_synchronized = False
+            self.reference_label.setText("原音已更换。请重新同步录制，或导入与新录音对应的参考。")
         self.original = audio
+        self.original_title = title
         self.processed = None
         self.echo_metadata = None
         self.source_combo.setCurrentIndex(0)
-        self.original_plot.set_audio(audio,title)
-        self.result_plot.set_audio(None,"处理结果")
-        self.speaker_result.setText("等待识别当前原音")
+        self.timeline.set_original(audio, title)
+        self.speaker_result.hide()
         self.speaker_scores.clear()
+        self.audition_tabs.setCurrentIndex(0)
+        self.update_clip_label()
+        from .dsp import audio_stats, rms
+
         stats = audio_stats(audio)
-        self.state_label.setText(f"{len(audio)/SR:.2f} 秒  ·  RMS {stats['rms_db']:.1f} dBFS  ·  峰值 {stats['peak']:.3f}")
         self.log(f"已载入 {title}，{len(audio)/SR:.2f} 秒")
         if rms(audio)<0.002:
             self.log("输入音量很低，请检查麦克风或靠近一些说话。")
@@ -500,12 +1021,24 @@ class MainWindow(QMainWindow):
             self.log("输入峰值达到满幅，可能发生削波；建议降低麦克风增益。")
         self.sync_controls()
 
-    def set_result(self,audio,title,metadata=None):
+    def update_clip_label(self):
+        if self.original is None:
+            self.state_label.setText("尚未载入音频")
+            self.state_label.setToolTip("")
+            return
+        from .dsp import audio_stats
+
+        stats = audio_stats(self.original)
+        self.state_label.setText(f"{stats['seconds']:.2f} 秒  ·  RMS {stats['rms_db']:.1f} dBFS")
+        self.state_label.setToolTip(f"{self.original_title}\n{self.state_label.text()}\n峰值 {stats['peak']:.3f}")
+
+    def set_result(self, audio, title, metadata=None):
         self.processed = audio
         self.echo_metadata = metadata
-        self.result_plot.set_audio(audio,title)
+        self.timeline.set_result(audio, title)
         self.log(f"{title}完成，{len(audio)/SR:.2f} 秒；可试听或导出 WAV。")
         self.sync_controls()
+        self.audition_tabs.setCurrentIndex(1)
 
     def selected_audio(self):
         audio = self.processed if self.source_combo.currentIndex()==1 else self.original
@@ -516,9 +1049,10 @@ class MainWindow(QMainWindow):
     def run_task(self,label,function,done):
         if self.task or self.engine.stream:
             return
-        self.stop_playback()
+        self.stop_playback(announce=False)
         self.log(label+"…")
         self.progress.setRange(0,0)
+        self.progress.show()
         self._task_done = done
         task = Task(function,self)
         self.task = task
@@ -549,18 +1083,20 @@ class MainWindow(QMainWindow):
         self._task_done = None
         if task:
             task.deleteLater()
-        self.progress.setRange(0,100)
-        self.progress.setValue(100)
+        self.progress.hide()
         self.refresh_members()
         self.sync_controls()
         if self._closing:
             self.close()
 
     def start_recording(self):
+        self.stop_playback(announce=False)
         try:
             self.engine.start_recording(self.input_device.currentData())
-            self._record_started = time.monotonic()
-            self.log("录音中；降噪实验请先保持约 0.4 秒安静，随后说话。")
+            if self.tabs.currentIndex() == 0 and self.noise_mode.currentIndex() == 0:
+                self.log(f"正在录音。前 {self.noise_duration.value():g} 秒保持安静，然后说话。")
+            else:
+                self.log("正在录音。录完请点击结束录音。")
             self.sync_controls()
         except Exception as exc:
             self.error("无法开启麦克风："+str(exc)+"\n请检查 Windows 麦克风权限、设备连接或更换输入设备。")
@@ -572,25 +1108,26 @@ class MainWindow(QMainWindow):
         try:
             audio = self.engine.stop_recording()
             if mode == "acoustic":
-                self.reference = self.engine.reference.copy()
-                self.reference_label.setText("参考：本次同步播放信号（含预留静音）；可直接执行 NLMS。")
-            self.set_original(audio,"声学实验麦克风录音" if mode=="acoustic" else "麦克风实录")
+                self.set_original(audio, "声学实验麦克风录音", synchronized_reference=self.engine.reference)
+            else:
+                self.set_original(audio, "麦克风实录")
             if self.engine.warning:
                 self.log("音频设备提示："+self.engine.warning+"；可能存在丢帧，请检查设备或重录。")
         except Exception as exc:
             self.error(str(exc))
         finally:
             self.level_meter.setValue(0)
+            self.update_clip_label()
             self.sync_controls()
 
     def start_acoustic(self):
-        if self.reference is None:
-            return
+        playback = self.reference_source if self.reference_source is not None else self.reference
+        if playback is None:
+            return self.error("请先导入远端参考。")
+        self.stop_playback(announce=False)
         try:
-            playback = self.reference_source if self.reference_source is not None else self.reference
             self.engine.start_acoustic(playback,self.input_device.currentData(),self.output_device.currentData(),self.volume.value()/100)
-            self._record_started = time.monotonic()
-            self.log("开始播放并录音。请在校准阶段保持安静，之后再说话；播放结束自动停止。")
+            self.log(f"同步播放录音中。前 {self.calibration.value():g} 秒保持安静，播放完成后自动结束。")
             self.sync_controls()
         except Exception as exc:
             self.error("声学实验无法开始："+str(exc))
@@ -599,29 +1136,125 @@ class MainWindow(QMainWindow):
         if self.engine.stream:
             elapsed = self.engine.frames/self.engine.rate
             level = self.engine.level
-            self.level_meter.setValue(int(np.clip((20*np.log10(max(level,1e-5))+60)/60*100,0,100)))
-            self.state_label.setText(f"● 正在采集 {elapsed:.1f} 秒  ·  输入 {20*np.log10(max(level,1e-5)):.1f} dBFS")
+            dbfs = 20 * math.log10(max(level, 1e-5))
+            self.level_meter.setValue(int(clamp((dbfs + 60) / 60 * 100, 0, 100)))
+            self.level_meter.setToolTip(f"输入电平 {dbfs:.1f} dBFS")
+            self.state_label.setText(f"正在录音 · {elapsed:.1f} 秒")
             if self.engine.done:
                 self.stop_recording()
+        elif self._playing and not self.timeline.scrubbing:
+            if self.engine.is_playing():
+                self.sync_playback_position()
+            else:
+                self.timeline.set_position(self._preview_length / SR, follow=self._follow_preview)
+                self.stop_playback(announce=False, remember_position=False)
+                self._preview_finished = True
+                self.log("试听结束。")
 
     def import_audio(self):
         path,_ = QFileDialog.getOpenFileName(self,"导入语音",str(self.root),"音频 (*.wav *.flac *.ogg *.aiff *.aif);;所有文件 (*)")
         if path:
             self.run_task("读取音频",lambda _:read_audio(path),lambda x:self.set_original(x,Path(path).name))
 
-    def play(self,result):
+    def audition_changed(self):
+        self.stop_playback(announce=False)
+        self.update_player()
+
+    def update_player(self):
+        result = self.audition_tabs.currentIndex() == 1
+        audio = self.processed if result else self.original
+        idle = self.task is None and self.engine.stream is None
+        self.play_button.setEnabled(idle and audio is not None)
+        self.play_button.setText("停止" if self._playing else "播放")
+        self.audition_position.setEnabled(idle and self.timeline.duration > 0)
+        hint = "输入秒数或 mm:ss.sss，按 Enter 定位。"
+        if audio is not None:
+            hint += f"\n当前试听音轨时长 {len(audio) / SR:.3f} 秒。"
+        self.audition_position.setToolTip(hint)
+
+    def display_position(self, seconds):
+        if not self.audition_position.isModified():
+            minutes, milliseconds = divmod(round(seconds * 1000), 60000)
+            seconds, milliseconds = divmod(milliseconds, 1000)
+            self.audition_position.setText(f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}")
+
+    def commit_position(self):
+        if not self.audition_position.isModified():
+            return
+        text = self.audition_position.text().strip()
+        self.audition_position.setModified(False)
+        try:
+            minutes, separator, seconds = text.partition(":")
+            value = int(minutes) * 60 + float(seconds) if separator else float(minutes)
+            if not math.isfinite(value):
+                raise ValueError
+        except ValueError:
+            self.log("位置格式用秒数或 mm:ss.sss，例如 1.25 或 00:01.250。")
+            self.display_position(self.timeline.position)
+            return
+        self.seek_audition(value)
+
+    def seek_audition(self, seconds):
+        was_playing = self._playing
+        self.stop_playback(announce=False, remember_position=False)
+        self._preview_finished = False
+        self.timeline.set_position(seconds, follow=True)
+        self.display_position(self.timeline.position)
+        if was_playing:
+            self.play(self.audition_tabs.currentIndex() == 1, restart_at_end=False)
+
+    def sync_playback_position(self):
+        elapsed = max(0, time.monotonic() - self._preview_started)
+        position = min(self._preview_offset / SR + elapsed, self._preview_length / SR)
+        self.timeline.set_position(position, follow=self._follow_preview)
+
+    def pause_preview_following(self):
+        self._follow_preview = False
+
+    def toggle_playback(self):
+        if self._playing:
+            self.stop_playback()
+        elif self.play_button.isEnabled():
+            self.play(self.audition_tabs.currentIndex() == 1)
+
+    def play(self, result, *, restart_at_end=True):
         try:
             x = self.processed if result else self.original
             if x is None:
                 return
-            self.engine.play(x,self.output_device.currentData(),self.volume.value()/100)
-            self.log("正在播放"+("处理结果" if result else "原始语音"))
+            offset = round(self.timeline.position * SR)
+            if self._preview_finished or offset >= len(x):
+                if not restart_at_end:
+                    return
+                offset = 0
+                self.timeline.set_position(0, follow=True)
+            self.engine.play(x, self.output_device.currentData(), self.volume.value() / 100, start_sample=offset)
+            self._preview_offset = offset
+            self._preview_length = len(x)
+            self._preview_started = time.monotonic()
+            self._playing = True
+            self._preview_finished = False
+            self._follow_preview = True
+            self.timeline.set_position(offset / SR, follow=True)
+            self.timer.setInterval(33)
+            self.update_player()
+            self.log("正在播放" + ("处理结果。" if result else "原始录音。"))
         except Exception as exc:
+            self._playing = False
+            self.update_player()
             self.error("无法播放："+str(exc))
 
-    def stop_playback(self):
-        import sounddevice as sd
-        sd.stop()
+    def stop_playback(self, *, announce=True, remember_position=True):
+        if not self._playing:
+            return
+        if remember_position:
+            self.sync_playback_position()
+        self.engine.stop_playback()
+        self._playing = False
+        self.timer.setInterval(100)
+        self.update_player()
+        if announce:
+            self.log("已停止试听。")
 
     def export_audio(self, checked=False, original=False):
         audio = self.original if original else self.processed
@@ -640,35 +1273,50 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self.error(str(exc))
 
-    def toggle_spectrum(self,checked):
-        for plot in (self.original_plot,self.result_plot):
-            plot.spectrum = checked
-            plot.update()
+    def toggle_spectrum(self, checked):
+        index = int(checked)
+        if self.display_tabs.currentIndex() != index:
+            self.display_tabs.setCurrentIndex(index)
+        else:
+            self.timeline.set_spectrum(checked)
+            self.monitor_meta.setText("前 8 秒 · 共用相对 dB" if checked else "16 kHz · 双轨同步")
+            self.x_axis_label.setText("频率" if checked else "时间")
+            self.y_axis_label.setVisible(not checked)
+            self.fit_db_button.setVisible(checked)
+            self.update_timeline_tools(self.timeline.width())
 
     def import_noise(self):
         path,_ = QFileDialog.getOpenFileName(self,"导入纯环境噪声",str(self.root),"音频 (*.wav *.flac *.ogg)")
         if path:
             def done(x):
                 self.noise = x
-                self.noise_label.setText(f"独立噪声样本：{Path(path).name}（{len(x)/SR:.2f} 秒）")
-                self.log("已设置独立噪声样本；请确认样本中没有说话。")
+                self.noise_name = Path(path).name
+                self.noise_mode.setCurrentIndex(1)
+                self.update_noise_label()
+                self.log("已载入独立噪声样本。")
             self.run_task("载入噪声样本",lambda _:read_audio(path),done)
 
-    def clear_noise(self):
-        self.noise = None
-        self.update_noise_label()
-
     def update_noise_label(self):
-        if self.noise is None:
-            self.noise_label.setText(f"噪声来源：输入音频开头 {self.noise_duration.value():.1f} 秒（请确保这段没有说话）")
+        if self.noise_mode.currentIndex() == 0:
+            self.noise_label.setText(f"录音开始时，前 {self.noise_duration.value():g} 秒保持安静。")
+        elif self.noise is None:
+            self.noise_label.setText("请导入同一环境录制的纯噪声。")
+        else:
+            self.noise_label.setText(f"{self.noise_name} · {len(self.noise)/SR:.2f} 秒")
 
     def apply_enhance(self):
         try:
             x = self.selected_audio()
             strength,duration = self.noise_strength.value(),self.noise_duration.value()
-            noise = self.noise.copy() if self.noise is not None else None
+            noise = None
+            if self.noise_mode.currentIndex() == 1:
+                if self.noise is None:
+                    raise ValueError("请先导入独立噪声样本。")
+                noise = self.noise.copy()
             if noise is None and len(x)/SR < duration+0.1:
                 raise ValueError("输入音频需长于噪声估计时长，请缩短噪声时长或导入独立噪声样本")
+            from .dsp import enhance
+
             self.run_task("执行语音增强",lambda _:enhance(x,strength,duration,noise),lambda out:self.set_result(out,"语音增强"))
         except Exception as exc:
             self.error(str(exc))
@@ -676,6 +1324,8 @@ class MainWindow(QMainWindow):
     def apply_echo(self):
         try:
             x = self.selected_audio()
+            from .dsp import EchoConfig, add_echo
+
             config = EchoConfig(self.echo_delay.value(),self.echo_decay.value(),self.echo_repeats.value())
             def done(result):
                 out,scale = result
@@ -687,6 +1337,8 @@ class MainWindow(QMainWindow):
     def apply_undo_echo(self):
         if not self.echo_metadata or self.processed is None:
             return
+        from .dsp import undo_echo
+
         meta,x = self.echo_metadata.copy(),self.processed.copy()
         self.run_task("按本次生成参数还原回声",lambda _:undo_echo(x,meta["config"],meta["scale"],meta["length"]),lambda out:self.set_result(out,"已知回声逆滤波还原"))
 
@@ -696,30 +1348,47 @@ class MainWindow(QMainWindow):
             def done(x):
                 self.reference = x
                 self.reference_source = x.copy()
-                self.reference_label.setText(f"参考：{Path(path).name} · {len(x)/SR:.2f} 秒")
-                self.log("远端参考已载入；声学实验前请选好扬声器和麦克风。")
+                self.reference_is_synchronized = False
+                self.reference_label.setText(f"{Path(path).name} · {len(x)/SR:.2f} 秒。可同步录制，或用于对应录音。")
+                self.log("已载入远端参考音频。")
             self.run_task("读取远端参考",lambda _:read_audio(path),done)
 
     def apply_aec(self):
         try:
+            if self.reference is None:
+                raise ValueError("请先同步录制，或导入对应的播放参考。")
+            from .dsp import cancel_echo
+
             x,reference = self.selected_audio(),self.reference.copy()
             delay = None if self.auto_delay.isChecked() else self.aec_delay.value()
             taps,cal = self.aec_taps.currentData(),self.calibration.value()
             def done(result):
                 out,stats = result
                 self.set_result(out,"NLMS 回声消除")
-                self.log(f"对齐延时 {stats['delay_ms']:.2f} ms；校准后能量下降 {stats['energy_reduction_db']:.2f} dB（含本地讲话时不等同于 ERLE）。")
+                self.log(f"校准验证衰减 {stats['calibration_reduction_db']:.2f} dB，参考延时 {stats['delay_ms']:.2f} ms。"
+                         f"\n校准后能量下降 {stats['energy_reduction_db']:.2f} dB，包含近端讲话时仅供对照。")
             self.run_task("自适应回声消除",lambda p:cancel_echo(x,reference,delay,taps,0.35,cal,p),done)
         except Exception as exc:
             self.error(str(exc))
 
     def refresh_members(self):
+        selected = self.member_list.currentItem()
+        active_name = selected.data(Qt.UserRole) if selected else None
         self.member_list.clear()
-        for name in self.store.members():
+        names = self.store.members()
+        for name in names:
             entries = [e for e in self.store.entries if e["name"]==name]
-            item = f"{name}  ·  {len(entries)} 段 / {sum(e['seconds'] for e in entries):.1f} 秒"
-            self.member_list.addItem(item)
-            self.member_list.item(self.member_list.count()-1).setData(Qt.UserRole,name)
+            self.member_list.addItem(f"{name}  ·  {len(entries)} 段  ·  {sum(e['seconds'] for e in entries):.1f} 秒")
+            item = self.member_list.item(self.member_list.count() - 1)
+            item.setData(Qt.UserRole, name)
+            if name == active_name:
+                self.member_list.setCurrentItem(item)
+        self.member_title.setText(f"已注册成员 {len(names)} 人")
+        self.member_list.setVisible(bool(names))
+        self.delete_member_button.setVisible(bool(names))
+        prompt = ("录一段语音，填写成员姓名，再点击注册。建议每人录 3 段不同内容。"
+                  if len(names) < 2 else "重新录一段未用于注册的语音，再点击识别。")
+        self.speaker_next.setText(prompt)
 
     def enroll_member(self):
         name = self.member_name.text().strip()
@@ -733,19 +1402,21 @@ class MainWindow(QMainWindow):
             return entry
         def done(entry):
             self.speaker_result.setText("已注册："+entry["name"])
+            self.speaker_result.show()
             self.log(f"已为 {entry['name']} 追加 {entry['seconds']:.1f} 秒声纹样本。")
         self.run_task("提取声纹并训练模型",register,done)
 
     def identify(self):
+        if len(self.store.members()) < 2:
+            return self.error("请先注册至少两名成员。")
         audio = self.original.copy()
         reject = self.reject_unknown.isChecked()
         def done(result):
             self.speaker_result.setText("识别结果："+result["name"])
+            self.speaker_result.show()
             scores = [f"{name}：{score:.3f}" for name,score in result["scores"]]
             if result["margin"] is not None:
                 scores.append(f"前两名得分差：{result['margin']:.3f}")
-            else:
-                scores.append("当前仅注册 1 人，无法比较不同成员；请继续注册其他成员。")
             if result["uncertain"]:
                 scores.append("匹配较弱或候选接近，建议补充不同句子的录音再测试。")
             scores.append("请用独立测试录音评估识别率；本结果不是认证凭据。")
@@ -771,7 +1442,9 @@ class MainWindow(QMainWindow):
     def apply_effect(self):
         try:
             x = self.selected_audio()
-            name,amount = self.effect_combo.currentText(),self.effect_amount.value()
+            from .dsp import effect
+
+            name, amount = self.effect_names[self.effect_choices.checkedId()], self.effect_amount.value()
             self.run_task("应用"+name,lambda _:effect(x,name,amount),lambda out:self.set_result(out,name))
         except Exception as exc:
             self.error(str(exc))
@@ -781,16 +1454,16 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("使用指南")
         dialog.setText("数字音效实验室 · 快速开始")
         dialog.setInformativeText(
-            "1. 选择麦克风和输出设备，点击开始录音；结束后可试听原音。\n"
-            "2. 降噪：先安静 0.4 秒，再说话；或导入纯环境噪声样本。\n"
-            "3. 回声：产生回声后可直接还原；真实声学消除需提供远端参考。\n"
-            "4. 声学实验：导入参考，使用扬声器播放并录音；前 2 秒本地不要说话。\n"
-            "5. 成员识别：录制不同句子，输入姓名并注册；每人建议至少 3 段。测试用新的录音。\n"
-            "6. 创意音效支持变速变调、机器人、电话音和音量调整。\n"
-            "7. 默认处理原音；选择上次结果可串联音效。导出为 16 kHz / 16 bit WAV。\n\n"
-            "本软件采用录音后处理，处理任务在后台运行。麦克风输入会转成 16 kHz 单声道。\n"
-            "音频不会自动保存；需保留原音请点击保存原音。声纹特征保存在 data/speakers。\n"
-            "详细说明、实验方法和测试结果见软件目录中的《使用说明.md》。")
+            "1. 在音频设备中选择麦克风和扬声器，再录音或导入已有音频。\n"
+            "2. 用录音开头降噪时，先按页面标出的时长保持安静。也可以导入独立噪声样本。\n"
+            "3. 回声音效可以直接还原。做声学回声消除时，请导入参考并在校准期间保持安静。\n"
+            "4. 每位成员建议注册至少 3 段不同的话。注册两名成员后，可用新的录音测试识别。\n"
+            "5. 用波形下方的原音和结果切换试听。文件可从保存与导出菜单写为 WAV。\n\n"
+            "在图内滚轮缩放横轴，在右侧标尺上滚轮缩放纵轴。可以拖动底部和右侧的选框或手柄。点“联动”可让两轴一起缩放。\n"
+            "频谱默认适配两条曲线的共同电平范围。点下方“自动”可重新适配当前频段的纵轴。\n"
+            "点击或拖动时间刻度定位，输入框也可输入时间。右上角可以切换上下或叠加。\n\n"
+            "音频在录完后处理，单段最长 300 秒。原音和结果可另存为 16 kHz / 16 bit WAV。\n"
+            "声纹特征保存在软件目录的 data/speakers。")
         dialog.exec()
 
     def closeEvent(self,event):
@@ -819,9 +1492,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("DSPStudio")
     app.setOrganizationName("DSPLab")
-    app.setFont(QFont("Microsoft YaHei UI",10))
-    app.setStyle("Fusion")
-    app.setStyleSheet(STYLE)
+    configure_appearance(app)
     def exception_hook(kind,value,tb):
         logging.error("Unhandled exception",exc_info=(kind,value,tb))
         QMessageBox.critical(None,"程序错误",str(value)+"\n详情已写入 data/dspstudio.log。")

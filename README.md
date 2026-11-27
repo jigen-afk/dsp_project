@@ -2,15 +2,29 @@
 
 ## 启动
 
-Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，无需联网。请保留整个 app 文件夹；不要单独移动 exe。软件目录需要可写。
+从仓库根目录执行以下命令，运行当前源码界面。
 
-若从源码运行：建议 Python 3.13，先执行 `python -m venv .venv`，然后 `.venv\Scripts\python -m pip install -r requirements-lock.txt`，最后 `.venv\Scripts\python main.py`。源码在 source 文件夹。
+```powershell
+cd source
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+Windows 10/11（64 位）可前往 [最新 Release](https://github.com/jigen-afk/dsp_project/releases/latest) 下载单文件 `DSPStudio.exe`，双击即可运行。请把文件放在可写目录。新版本首次启动会在本地创建 `data/runtime/` 缓存，之后直接复用。关闭软件后可以删除这个缓存目录，程序会在下次启动时重建。
+
+从 `source` 运行 `powershell -File build.ps1` 也可在本机构建，生成的单文件位于 `source/dist/DSPStudio.exe`。构建需安装 Visual Studio C++ 生成工具和 Windows SDK。声纹、日志和默认导出目录位于 `data/`，音频库和 DSP 库在使用相应功能时加载。
+
+## 自动构建和发布
+
+- PR 提交后，[Windows build and release](https://github.com/jigen-afk/dsp_project/actions/workflows/windows.yml) 会运行源码测试，再把构建出的 EXE 放到空目录里自检。通过后可在对应运行记录的 **Artifacts** 下载单文件试用版。
+- PR 合入默认分支后会再构建一次。测试通过后，工作流校验 EXE 的 SHA-256，自动将 `DSPStudio.exe` 发布到 **Latest Release**。默认分支的直接提交也走同一流程。
 
 ## 一、采集实际环境语音
 
-1. 在窗口上方选择麦克风及播放设备；默认使用 Windows 默认音频设备。设备插拔后点击刷新。
+1. 在右上角的“音频设备”选择麦克风和播放设备。默认使用 Windows 默认音频设备。设备插拔后点击刷新。
 2. 点击“开始录音”，在真实环境中说话；点击“结束录音”。单段最长 300 秒，会自动停止。
-3. 点击“原音”试听；“保存原音”可将当前录音另存为 WAV。新录音会替换内存中的原音和处理结果，需要保留的音频请先保存。
+3. 在图表下方选“原音”或“结果”，再点“播放”。“保存与导出”可另存 WAV。新录音会替换内存中的原音和处理结果，需要保留的音频请先保存。
 4. 麦克风按照设备支持的采样率采集，停止后转换为 **16 kHz、单声道、float32** 处理；导出为 **16 kHz、16 bit PCM WAV**。
 5. 也支持导入 WAV、FLAC、OGG、AIFF。多声道平均为单声道，不保证支持 MP3。
 
@@ -21,7 +35,8 @@ Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，
 - 录音开头保持默认 0.4 秒安静，随后说话；填写实际纯噪声时长。
 - 或单独录制只含风扇声、空调声等环境噪声的 WAV，然后导入纯噪声样本。样本应与待处理语音来自相同环境和设备设置，不能含有说话声。
 - 建议降噪强度 0.8～1.5，点击执行，切换原音和处理结果试听。
-- 显示频谱可以观察平均功率谱的变化。界面的频谱以各自峰值归一化，主要用于观察频率分布，不能直接当作绝对降噪量。
+- 用“波形／频谱”切换显示，再用“上下／叠加”选择对比方式。频谱共用 0 dB 参考和自动纵轴，可观察两条曲线的相对电平差。放大某个频段后，点底部“自动”重新适配纵轴。
+- 图内滚轮缩放横轴，右侧标尺滚轮缩放纵轴。“联动”可同时缩放两轴。点击时间刻度或在右下角输入时间，可以从该处试听。
 
 算法采用 512 点 Hann 窗 STFT，128 点帧移，以纯噪声样本估计噪声功率谱。维纳形式的谱增益经过时间及频率平滑，保留谱底，再 ISTFT 重建。强度为 0 时旁路。算法适合相对稳定的背景噪声，不能保证去除其他人的讲话或所有突发噪声。
 
@@ -33,7 +48,9 @@ Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，
 
 `y[n] = x[n] + a*x[n-D] + a²*x[n-2D] + ... + a^K*x[n-KD]`
 
-点击产生回声后，“还原本次生成的回声”使用此次生成时保存的参数与缩放系数逆滤波，并移除回声尾音。后续修改界面参数不影响此次还原。该按钮仅用于软件本次生成的回声，不能自动消除任意录音的混响；导入录音应使用参考信号 NLMS 功能。
+初次试听可以录一小句后留出停顿，设置延时 350 ms、衰减 0.60、重复 3 次。点击“产生回声”后，切换“原音”和“结果”试听。自然播完后再次点击“播放”会从头开始，手动定位可以直接听尾音。
+
+“还原本次回声”使用生成时保存的参数与缩放系数逆滤波，并移除回声尾音。导入含有真实声学回声的录音时，用对应的播放参考执行 NLMS。
 
 ### 参考信号 NLMS 声学回声消除
 
@@ -41,7 +58,7 @@ Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，
 
 方式 A：导入含回声的麦克风录音，再导入对应的远端参考。选择自动估计延时，或手动指定正延时。
 
-方式 B：导入远端参考后，点击“播放参考并采集麦克风”。此时使用**扬声器**输出，软件同步记录参考与麦克风信号，播放结束自动停止，也可手动结束。程序加入少量起始静音与尾音，保存的参考与此同步。请先调低音量再试。
+方式 B：导入远端参考后，点“播放并录音”。软件通过**扬声器**播放，麦克风同步录制，播放结束后自动停止。随后点“执行 NLMS 消除”，再切换“原音”和“结果”试听。
 
 实验步骤：
 
@@ -49,7 +66,7 @@ Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，
 2. 本地在开始校准时保持安静（默认 2 秒），让滤波器学习“扬声器→房间→麦克风”的回声路径。
 3. 校准结束后再说话；滤波器停止更新，避免把本地讲话学成回声。
 4. 点击执行 NLMS；默认 512 taps，可根据混响长度调大到 2048 taps。
-5. 试听结果。日志显示估计延时和校准后输出能量变化。有本地讲话时，这个能量比**不是严格 ERLE**，可能为负值，也不能直接代表语音质量。
+5. 软件会在一小段尚未参与训练的校准录音上检查衰减。若未测到足够的降低，会提示检查参考与录音的配对并重录。通过后日志会显示校准验证衰减、参考延时以及校准后的能量变化。评估 ERLE 时请用远端单讲片段。
 
 自动对齐搜索 0～1200 ms 的正延时，并在原始采样精度上细化。NLMS：`e=d-wᵀu`，`w ← w + μ e u/(ε+uᵀu)`，步长 0.35，仅在远端校准时段更新。适用于固定设备位置、近似线性回声路径的实验。长混响、设备移动、自动增益、播放削波、丢帧和采样时钟偏移会降低效果；本版不属于商用全双工 AEC。
 
@@ -73,7 +90,7 @@ Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，
 - **电话音**：300～3400 Hz 五阶巴特沃斯带通。
 - **音量调整**：−24～18 dB；若会溢出，统一衰减保留波形形状。
 
-顶部播放音量只影响试听，不改变保存的结果。导出和试听前均提供峰值保护。
+“音频设备”中的播放音量用于试听及声学实验的参考播放。导出和试听前均提供峰值保护。
 
 ## 六、验证与课程实验
 
@@ -89,11 +106,11 @@ Windows 10/11 64 位，运行 `app/DSPStudio.exe`。无需另外安装 Python，
 | NLMS | 固定扬声器与麦克风、远端单讲校准；另做双讲 | 远端单讲 ERLE、双讲本地语音保留 |
 | 成员识别 | 每人独立测试至少 10 段，不与注册文件重复 | 正确数/总数、混淆矩阵、噪声条件 |
 
-命令行自检（完成后退出，结果写 JSON）：
+在 `DSPStudio.exe` 所在目录执行命令行自检，完成后退出并将结果写入 JSON。
 
 ```text
-app\DSPStudio.exe --self-test --report verification\manual_self_check.json
-app\DSPStudio.exe --self-test --hardware --report verification\manual_hardware_check.json
+.\DSPStudio.exe --self-test --report verification\manual_self_check.json
+.\DSPStudio.exe --self-test --hardware --report verification\manual_hardware_check.json
 ```
 
 `--hardware` 会短暂打开默认麦克风，并播放低音量短测试音，不保存采集内容。默认自检不访问音频设备。源码测试：`python -m pytest tests -q`。打包：在 source 中执行 `powershell -File build.ps1`。
@@ -110,7 +127,7 @@ app\DSPStudio.exe --self-test --hardware --report verification\manual_hardware_c
 ```text
 D:/dsp/
   使用说明.md
-  app/              可直接运行的 exe 及动态库
+  app/              随仓库保留的旧版便携包
   source/           Python 源码、测试、构建脚本
   samples/          合成实验样例（明确标注）
   verification/     测试证据与界面截图

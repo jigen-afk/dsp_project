@@ -75,6 +75,10 @@ def run_checks(hardware=False, demo_dir=None):
     # Loading algorithms alone misses failures in the frozen Qt dependency chain.
     from PySide6.QtWidgets import QApplication,QWidget
     from PySide6.QtCore import qVersion
+    from sounddevice import get_portaudio_version
+
+    audio_version, audio_version_text = get_portaudio_version()
+    report["checks"]["portaudio_runtime"] = {"version": audio_version_text, "passed": audio_version > 0}
     qt_app=QApplication.instance() or QApplication(["DSPSelfCheck","-platform","offscreen"])
     widget=QWidget()
     widget.resize(320,160)
